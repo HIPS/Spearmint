@@ -1,0 +1,13 @@
+*.pyc
+*.log
+*.out
+*.blg
+*.aux
+*.bib
+#*#
+*.DS_Store
+*.pdf
+*.py~
+
+
+

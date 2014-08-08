@@ -1,0 +1,40 @@
+{
+    "language"        : "PYTHON",
+    "experiment-name" : "branin-distributed-example",
+    "polling-time"    : 1,
+    "resources" : {
+        "my-machine" : {
+            "scheduler"         : "local",
+            "max-concurrent"    : 1,
+            "max-finished-jobs" : 100
+        },
+        "cluster" : {
+            "scheduler"         : "SLURM",
+            "max-concurrent"    : 3,
+            "max-finished-jobs" : 1000
+        }
+    },
+    "tasks": {
+        "branin" : {
+            "type"       : "OBJECTIVE",
+            "likelihood" : "NOISELESS",
+            "main-file"  : "branin",
+            "resources"  : ["my-machine", "cluster"]
+        }
+    },
+    "variables": {
+        "x" : {
+            "type" : "FLOAT",
+            "size" : 1,
+            "min"  : -5,
+            "max"  : 10
+        },
+        "y" : {
+            "type" : "FLOAT",
+            "size" : 1,
+            "min"  : 0,
+            "max"  : 15
+        }
+    }
+}
+
