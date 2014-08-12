@@ -10,7 +10,7 @@ The Software was developed by Ryan P. Adams, Michael Gelbart, and Jasper Snoek a
 Using the Software indicates your agreement to be bound by the terms of this Software Use Agreement (“Agreement”). Absent your agreement to the terms below, you (the “End User”) have no rights to hold or use the Software whatsoever. 
 Harvard agrees to grant hereunder the limited non-exclusive license to End User for the use of the Software in the performance of End User’s internal, non-commercial research and academic use at End User’s academic or not-for-profit research institution (“Institution”) on the following terms and conditions: 
 
-**1.  NO REDISTRIBUTION.** The Software remains the property Harvard, Toronto and Socpra, and except as set forth in Section 4, End User shall not publish, distribute, or otherwise transfer or make available the Software to any other party.
+**1.  NO REDISTRIBUTION.** The Software remains the property of Harvard, Toronto and Socpra, and except as set forth in Section 4, End User shall not publish, distribute, or otherwise transfer or make available the Software to any other party.
 
 **2. NO COMMERCIAL USE.** End User shall not use the Software for commercial purposes and any such use of the Software is expressly prohibited. This includes, but is not limited to, use of the Software in fee-for-service arrangements, core facilities or laboratories or to provide research services to (or in collaboration with) third parties for a fee, and in industry-sponsored collaborative research projects where any commercial rights are granted to the sponsor. If End User wishes to use the Software for commercial purposes or for any other restricted purpose, End User must execute a separate license agreement with Harvard.  
 
