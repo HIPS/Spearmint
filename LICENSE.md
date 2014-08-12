@@ -1,7 +1,6 @@
 # Spearmint
 
-###Academic and Non-Commercial Research Use Software License and Terms
-of Use
+###Academic and Non-Commercial Research Use Software License and Terms of Use
 
 Spearmint is a software package to perform Bayesian optimization
 according to specific algorithms (the “Software”).  The Software is
