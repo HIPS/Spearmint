@@ -26,9 +26,13 @@ Facsimile: (617) 495-9568
 E-mail: otd@harvard.edu  
 
 **3. OWNERSHIP AND COPYRIGHT NOTICE.** Harvard, Toronto and Socpra own all intellectual property in the Software. End User shall gain no ownership to the Software. End User shall not remove or delete and shall retain in the Software, in any modifications to Software and in any Derivative Works, the copyright, trademark, or other notices pertaining to Software as provided with the Software.
+
 **4. DERIVATIVE WORKS.** End User may create and use Derivative Works, as such term is defined under U.S. copyright laws, provided that any such Derivative Works shall be restricted to non-commercial, internal research and academic use at End User’s Institution. End User may distribute Derivative Works to other Institutions solely for the performance of non-commercial, internal research and academic use on terms substantially similar to this License and Terms of Use.
+
 **5. FEEDBACK.** In order to improve the Software, comments from End Users may be useful. End User agrees to provide Harvard with feedback on the End User’s use of the Software (e.g., any bugs in the Software, the user experience, etc.).  Harvard is permitted to use such information provided by End User in making changes and improvements to the Software without compensation or an accounting to End User. 
+
 **6. NON ASSERT.** End User acknowledges that Harvard, Toronto and/or Sherbrooke or Socpra may develop modifications to the Software that may be based on the feedback provided by End User under Section 5 above. Harvard, Toronto and Sherbrooke/Socpra shall not be restricted in any way by End User regarding their use of such information.  End User acknowledges the right of Harvard, Toronto and Sherbrooke/Socpra to prepare, publish, display, reproduce, transmit and or use modifications to the Software that may be substantially similar or functionally equivalent to End User’s modifications and/or improvements if any.  In the event that End User obtains patent protection for any modification or improvement to Software, End User agrees not to allege or enjoin infringement of End User’s patent against Harvard, Toronto or Sherbrooke or Socpra, or any of the researchers, medical or research staff, officers, directors and employees of those institutions.
+
 **7. PUBLICATION & ATTRIBUTION.** End User has the right to publish, present, or share results from the use of the Software.  In accordance with customary academic practice, End User will acknowledge Harvard, Toronto and Sherbrooke/Socpra as the providers of the Software and may cite the relevant reference(s) from the following list of publications: 
 
 Practical Bayesian Optimization of Machine Learning Algorithms  
