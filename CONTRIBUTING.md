@@ -3,7 +3,7 @@ Spearmint
 
 ###Academic and Non-Commercial Research Use Software License and Terms of Use
 
-Spearmint is a software package to perform Bayesian optimization according to specific algorithms (the “Software”).  The Software is designed to automatically run experiments (thus the code name 'spearmint') in a manner that iteratively adjusts a number of parameters so as to minimize some objective in as few runs as possible. 
+Spearmint is a software package to perform Bayesian optimization according to specific algorithms (the “Software”).  The Software is designed to automatically run experiments (thus the code name *spearmint*) in a manner that iteratively adjusts a number of parameters so as to minimize some objective in as few runs as possible. 
 
 The Software was developed by Ryan P. Adams, Michael Gelbart, and Jasper Snoek and at Harvard University, Kevin Swersky at the University of Toronto (“Toronto”), and Hugo Larochelle at the Université de Sherbrooke (“Sherbrooke”), which assigned its rights in the Software to Socpra Sciences et Génie S.E.C. (“Socpra”). Pursuant to an inter-institutional agreement between the parties, it is distributed for free academic and non-commercial research use by the President and Fellows of Harvard College (“Harvard”).
 
