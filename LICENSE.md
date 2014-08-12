@@ -82,7 +82,7 @@ use such information provided by End User in making changes and
 improvements to the Software without compensation or an accounting
 to End User.
 
-**6.  NON ASSERT.**End User acknowledges that Harvard, Toronto and/or
+**6.  NON ASSERT.** End User acknowledges that Harvard, Toronto and/or
 Sherbrooke or Socpra may develop modifications to the Software that
 may be based on the feedback provided by End User under Section 5
 above. Harvard, Toronto and Sherbrooke/Socpra shall not be
