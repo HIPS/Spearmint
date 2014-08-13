@@ -1,6 +1,8 @@
 spearmint: Bayesian optimization codebase
 =========================================
 
+Spearmint is a software package to perform Bayesian optimization according to specific algorithms (the “Software”). The Software is designed to automatically run experiments (thus the code name spearmint) in a manner that iteratively adjusts a number of parameters so as to minimize some objective in as few runs as possible.
+
 **STEP 1: Installation**  
 
 1. Install [python](https://www.python.org/), [numpy](http://www.numpy.org/), [scipy](http://www.numpy.org/). For academic users, the anaconda distribution is great. Use numpy 1.8 or higher.  
