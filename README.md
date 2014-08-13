@@ -3,7 +3,7 @@ spearmint: Bayesian optimization codebase
 
 Spearmint is a software package to perform Bayesian optimization according to specific algorithms (the “Software”). The Software is designed to automatically run experiments (thus the code name spearmint) in a manner that iteratively adjusts a number of parameters so as to minimize some objective in as few runs as possible.
 
-**IMPORTANT:** Before using spearmint please be aware of the [license](LICENSE.md).
+**IMPORTANT:** Spearmint is under an *Academic and Non-Commercial Research Use* license.  Before using spearmint please be aware of the [license](LICENSE.md).
 
 **STEP 1: Installation**  
 
