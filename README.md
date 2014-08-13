@@ -14,7 +14,8 @@ spearmint: Bayesian optimization codebase
 2. Create a config file. There are 3 example config files in the ../examples directory.  
 
 **STEP 3: Running spearmint**  
-1. Start up a MongoDB daemon instance: `mongod --fork --logpath <path/to/logfile\> --dbpath <path/to/dbfolder\>`  
+1. Start up a MongoDB daemon instance:  
+    mongod --fork --logpath <path/to/logfile\> --dbpath <path/to/dbfolder\>  
 2. Run spearmint: `python main.py \</path/to/experiment/directory\>`
 
 **STEP 4: Looking at your results**  
