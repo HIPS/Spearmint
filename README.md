@@ -3,7 +3,7 @@ spearmint: Bayesian optimization codebase
 
 **STEP 1: Installation**  
 
-1. Install python, numpy, scipy. For academic users, the anaconda distribution is great. Use numpy 1.8 or higher. 
+1. Install [python](https://www.python.org/), [numpy](http://www.numpy.org/), [scipy](http://www.numpy.org/). For academic users, the anaconda distribution is great. Use numpy 1.8 or higher.  
 2. Download/clone the spearmint code  
 3. Install the spearmint package using pip: `pip install -e \</path/to/spearmint/root\>` (the -e means changes will be reflected automatically)  
 4. Download and install MongoDB: https://www.mongodb.org/   
