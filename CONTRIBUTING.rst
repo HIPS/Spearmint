@@ -42,18 +42,22 @@ Requests for use of the Software for commercial purposes, please contact:
 
   Practical Bayesian Optimization of Machine Learning Algorithms  
   Jasper Snoek, Hugo Larochelle and Ryan Prescott Adams  
-  *Advances in Neural Information Processing Systems*, 2012  
+  Advances in Neural Information Processing Systems, 2012  
 
   Multi-Task Bayesian Optimization  
   Kevin Swersky, Jasper Snoek and Ryan Prescott Adams  
-  *Advances in Neural Information Processing Systems*, 2013  
+  Advances in Neural Information Processing Systems, 2013  
 
   Input Warping for Bayesian Optimization of Non-stationary Functions  
   Jasper Snoek, Kevin Swersky, Richard Zemel and Ryan Prescott Adams  
-  *International Conference on Machine Learning*, 2014  
+  International Conference on Machine Learning, 2014  
 
   Bayesian Optimization and Semiparametric Models with Applications to Assistive Technology  
   Jasper Snoek, PhD Thesis, University of Toronto, 2013  
+  
+  Bayesian Optimization with Unknown Constraints
+  Michael Gelbart, Jasper Snoek and Ryan Prescott Adams
+  Uncertainty in Artificial Intelligence, 2014
 
 **8.	NO WARRANTIES.** THE SOFTWARE IS PROVIDED "AS IS." TO THE FULLEST EXTENT PERMITTED BY LAW, HARVARD, TORONTO AND SHERBROOKE and Socpra HEREBY DISCLAIM ALL WARRANTIES OF ANY KIND (EXPRESS, IMPLIED OR OTHERWISE) REGARDING THE SOFTWARE, INCLUDING BUT NOT LIMITED TO ANY IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OWNERSHIP, AND NON-INFRINGEMENT.  HARVARD, TORONTO AND SHERBROOKE and Socpra MAKE NO WARRANTY ABOUT THE ACCURACY, RELIABILITY, COMPLETENESS, TIMELINESS, SUFFICIENCY OR QUALITY OF THE SOFTWARE.  HARVARD, TORONTO AND SHERBROOKE and Socpra DO NOT WARRANT THAT THE SOFTWARE WILL OPERATE WITHOUT ERROR OR INTERRUPTION.
 
