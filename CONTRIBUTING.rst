@@ -17,14 +17,16 @@ Harvard agrees to grant hereunder the limited non-exclusive license to End User 
 
 Requests for use of the Software for commercial purposes, please contact: 
 
-Office of Technology Development  
-Harvard University  
-Smith Campus Center, Suite 727E  
-1350 Massachusetts Avenue  
-Cambridge, MA 02138 USA  
-Telephone: (617) 495-3067  
-Facsimile: (617) 495-9568  
-E-mail: otd@harvard.edu  
+::
+
+  Office of Technology Development  
+  Harvard University  
+  Smith Campus Center, Suite 727E  
+  1350 Massachusetts Avenue  
+  Cambridge, MA 02138 USA  
+  Telephone: (617) 495-3067  
+  Facsimile: (617) 495-9568  
+  E-mail: otd@harvard.edu  
 
 **3. OWNERSHIP AND COPYRIGHT NOTICE.** Harvard, Toronto and Socpra own all intellectual property in the Software. End User shall gain no ownership to the Software. End User shall not remove or delete and shall retain in the Software, in any modifications to Software and in any Derivative Works, the copyright, trademark, or other notices pertaining to Software as provided with the Software.
 
@@ -36,20 +38,22 @@ E-mail: otd@harvard.edu
 
 **7. PUBLICATION & ATTRIBUTION.** End User has the right to publish, present, or share results from the use of the Software.  In accordance with customary academic practice, End User will acknowledge Harvard, Toronto and Sherbrooke/Socpra as the providers of the Software and may cite the relevant reference(s) from the following list of publications: 
 
-Practical Bayesian Optimization of Machine Learning Algorithms  
-Jasper Snoek, Hugo Larochelle and Ryan Prescott Adams  
-*Advances in Neural Information Processing Systems*, 2012  
+::
 
-Multi-Task Bayesian Optimization  
-Kevin Swersky, Jasper Snoek and Ryan Prescott Adams  
-*Advances in Neural Information Processing Systems*, 2013  
+  Practical Bayesian Optimization of Machine Learning Algorithms  
+  Jasper Snoek, Hugo Larochelle and Ryan Prescott Adams  
+  *Advances in Neural Information Processing Systems*, 2012  
 
-Input Warping for Bayesian Optimization of Non-stationary Functions  
-Jasper Snoek, Kevin Swersky, Richard Zemel and Ryan Prescott Adams  
-*International Conference on Machine Learning*, 2014  
+  Multi-Task Bayesian Optimization  
+  Kevin Swersky, Jasper Snoek and Ryan Prescott Adams  
+  *Advances in Neural Information Processing Systems*, 2013  
 
-Bayesian Optimization and Semiparametric Models with Applications to Assistive Technology  
-Jasper Snoek, PhD Thesis, University of Toronto, 2013  
+  Input Warping for Bayesian Optimization of Non-stationary Functions  
+  Jasper Snoek, Kevin Swersky, Richard Zemel and Ryan Prescott Adams  
+  *International Conference on Machine Learning*, 2014  
+
+  Bayesian Optimization and Semiparametric Models with Applications to Assistive Technology  
+  Jasper Snoek, PhD Thesis, University of Toronto, 2013  
 
 **8.	NO WARRANTIES.** THE SOFTWARE IS PROVIDED "AS IS." TO THE FULLEST EXTENT PERMITTED BY LAW, HARVARD, TORONTO AND SHERBROOKE and Socpra HEREBY DISCLAIM ALL WARRANTIES OF ANY KIND (EXPRESS, IMPLIED OR OTHERWISE) REGARDING THE SOFTWARE, INCLUDING BUT NOT LIMITED TO ANY IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OWNERSHIP, AND NON-INFRINGEMENT.  HARVARD, TORONTO AND SHERBROOKE and Socpra MAKE NO WARRANTY ABOUT THE ACCURACY, RELIABILITY, COMPLETENESS, TIMELINESS, SUFFICIENCY OR QUALITY OF THE SOFTWARE.  HARVARD, TORONTO AND SHERBROOKE and Socpra DO NOT WARRANT THAT THE SOFTWARE WILL OPERATE WITHOUT ERROR OR INTERRUPTION.
 
