@@ -26,7 +26,6 @@ setup(
               'spearmint.tasks',
               'spearmint.transformations',
               'spearmint.utils',
-              'spearmint.visualizations',
               'spearmint.utils.database',],
     long_description=read('README.md'),
 )
