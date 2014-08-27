@@ -28,6 +28,8 @@ Spearmint implements a combination of the algorithms detailed in the following p
     Michael Gelbart, Jasper Snoek and Ryan Prescott Adams
     Uncertainty in Artificial Intelligence, 2014
 
+####Setting up Spearmint
+
 **STEP 1: Installation**  
 
 1. Install [python](https://www.python.org/), [numpy](http://www.numpy.org/), [scipy](http://www.numpy.org/). For academic users, the [anaconda](http://continuum.io/downloads) distribution is great. Use numpy 1.8 or higher.  
