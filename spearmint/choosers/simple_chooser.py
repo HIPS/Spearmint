@@ -201,6 +201,9 @@ DEFAULT_GRIDSIZE  = 20000
 DEFAULT_GRIDSEED  = 0
 DEFAULT_NUMDESIGN = 2
 
+DEFAULT_NUMSPRAY  = 10
+DEFAULT_SPRAYSTD  = 1e-3
+
 
 def init(options):
     return SimpleChooser(options)
@@ -210,8 +213,8 @@ class SimpleChooser(object):
     def __init__(self, options):
         self.grid_size  = options.get('grid_size', DEFAULT_GRIDSIZE)
         self.grid_seed  = options.get('grid_seed', DEFAULT_GRIDSEED)
-        self.num_spray  = 10
-        self.spray_std  = 1e-3
+        self.num_spray = options.get('num-spray', DEFAULT_NUMSPRAY)
+        self.spray_std = options.get('spray-std', DEFAULT_SPRAYSTD)
         self.check_grad = options.get('check-grad', False)
 
         # Grab options for the objective and the constraint
