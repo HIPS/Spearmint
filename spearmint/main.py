@@ -241,7 +241,7 @@ def main():
     # Set DB address
     db_address = parse_db_address(options)
     if 'database' not in options:
-            options['database'] = {'name': 'spearmint', 'address': db_address}
+        options['database'] = {'name': 'spearmint', 'address': db_address}
     else:
         options['database']['address'] = db_address
 
