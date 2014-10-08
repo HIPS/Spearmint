@@ -235,7 +235,8 @@ def main():
 
     # Set sensible defaults for options
     options['chooser']  = options.get('chooser', 'default_chooser')
-    options['tasks']    = options.get('tasks', {'main': {'type' : 'OBJECTIVE', 'likelihood' : 'GAUSSIAN'}})
+    if 'tasks' not in options:
+        options['tasks'] = {'main' : {'type' : 'OBJECTIVE', 'likelihood' : options.get('likelihood', 'GAUSSIAN')}}
     experiment_name     = options.get("experiment-name", 'unnamed-experiment')
 
     # Set DB address

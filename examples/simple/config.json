@@ -2,6 +2,7 @@
     "language"        : "PYTHON",
     "main-file"       : "branin.py",
     "experiment-name" : "simple-braninhoo-example",
+    "likelihood"      : "NOISELESS",
     "variables" : {
         "x" : {
             "type" : "FLOAT",
