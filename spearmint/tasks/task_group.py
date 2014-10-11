@@ -244,6 +244,7 @@ class TaskGroup(object):
 
     @property
     def values(self):
+        """return a dictionary of the task values keyed by task name"""
         return {task_name : task.values for task_name, task in self.tasks.iteritems()}
 
     @values.setter

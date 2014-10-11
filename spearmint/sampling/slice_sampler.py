@@ -194,9 +194,36 @@ from ..utils           import param as hyperparameter_utils
 
 
 class SliceSampler(AbstractSampler):
+    """generate samples from a model using slice sampling
+    
+    Parameters
+    ----------
+    *params_to_sample : args of type Params
+        The parameters that we are to be sampled.
+    **sampler_options
+    
+    Attributes
+    ----------
+    params : list of Params objects
+        The atribute `value` of each element in the list is updated
+        upon calling `self.sample()`.  
+    """
     def logprob(self, x, model):
+        """compute the log probability of observations x
+        
+        This includes the model likelihood as well as any prior
+        probability of the parameters
+        
+        Returns
+        -------
+        lp : float
+            the log probability
+        """
+        # set values of the parameers in self.params to be x
         hyperparameter_utils.set_params_from_array(self.params, x)
+        
         lp = 0.0
+        # sum the log probabilities of the parameter priors
         for param in self.params:
             lp += param.prior_logprob()
 
@@ -209,6 +236,7 @@ class SliceSampler(AbstractSampler):
         if not np.isfinite(lp):
             return lp
         
+        # include the log probability from the model
         lp += model.log_likelihood()
 
         if np.isnan(lp):
@@ -217,8 +245,20 @@ class SliceSampler(AbstractSampler):
         return lp
 
     def sample(self, model):
+        """generate a new sample of parameters for the model
+        
+        Notes
+        -----
+        The parameters are stored as self.params which is a list of Params objects.  
+        The values of the parameters are updated on each call.  Pesumably the value of 
+        the parameter affects the model (this is not required, but it would be a bit 
+        pointless othewise) 
+        
+        """
+        # turn self.params into a 1d numpy array
         params_array = hyperparameter_utils.params_to_array(self.params)
         for i in xrange(self.thinning + 1):
+            # get a new value for the parameter array via slice sampling
             params_array, current_ll = slice_sample(params_array, self.logprob, model, **self.sampler_options)
             hyperparameter_utils.set_params_from_array(self.params, params_array) # Can this be untabbed safely?
         self.current_ll = current_ll # for diagnostics

@@ -212,6 +212,16 @@ def init(options):
 
 
 class DefaultChooser(object):
+    """class which which makes suggestions for new jobs
+    
+    Attributes
+    ----------
+    models : dict
+        The keys are the tasks and the values are the models which are used 
+        to make the suggestsions.  The default models are GP or GPClassifier
+    objective : dict
+        ?
+    """
     def __init__(self, options):
         self.grid_size = options.get('grid_size', DEFAULT_GRIDSIZE)
         self.grid_seed = options.get('grid_seed', DEFAULT_GRIDSEED)
@@ -234,6 +244,12 @@ class DefaultChooser(object):
         self.isFit = False
 
     def fit(self, task_group, hypers=None, options=None):
+        """return a set of hyper parameters for the model fitted to the data
+        
+        Parameters
+        ----------
+        task_goup : object of type TaskGroup
+        """
         self.task_group = task_group
         self.num_dims   = task_group.num_dims
         new_hypers      = {}

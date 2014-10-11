@@ -182,13 +182,7 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
-import ast
-import sys
-
 import numpy        as np
-import numpy.random as npr
-import scipy.linalg as spla
-import scipy.stats  as sps
 
 from abc import ABCMeta, abstractmethod
 
@@ -216,13 +210,16 @@ class AbstractModel(object):
         pass
 
     def function_over_hypers(self, fun, *fun_args, **fun_kwargs):
+        """Compute the function fun while averaging over the stored hyperparameter samples of multiple models. 
+        """
         return function_over_hypers([self], fun, *fun_args, **fun_kwargs)
 
-# Compute the function fun while averaging over the stored
-# hyperparameter samples of multiple models. If models have different
-# numbers of samples, use the first n samples of each model,
-# where n is the min number of samples over the models
 def function_over_hypers(models, fun, *fun_args, **fun_kwargs):
+    """Compute the function fun while averaging over the stored hyperparameter samples of multiple models. 
+    
+    If models have different numbers of samples, use the first n samples of each model,
+    where n is the min number of samples over the models
+    """
 
     # The the minimum of the number of states over the different models
     min_num_states = reduce(min, map(lambda x: x.num_states, models), np.inf)
