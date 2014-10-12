@@ -256,7 +256,8 @@ class DefaultChooser(object):
 
         # Create the grid of optimization initializers
         # Need to do it here because it's used in many places e.g. best
-        self.grid = sobol_grid.generate(self.num_dims)
+        self.grid = sobol_grid.generate(self.num_dims, grid_size=self.grid_size, 
+                                        grid_seed=self.grid_seed)
 
         # A useful hack: add previously visited points to the grid
         for task_name, task in task_group.tasks.iteritems():
@@ -426,8 +427,10 @@ class DefaultChooser(object):
             unnormalized_std_at_best = obj_task.unstandardize_variance(std_at_best)
 
             # Print out the minimum according to the model
-            sys.stderr.write('\nMinimum expected objective value under model is %.5f (+/- %.5f), at location:\n' % (unnormalized_best_value, unnormalized_std_at_best))
-            self.task_group.paramify_and_print(self.task_group.from_unit(current_best_location).flatten(), left_indent=16, indent_top_row=True)
+            sys.stderr.write('\nMinimum expected objective value under model '
+                'is %.5f (+/- %.5f), at location:\n' % (unnormalized_best_value, unnormalized_std_at_best))
+            self.task_group.paramify_and_print(self.task_group.from_unit(current_best_location).flatten(), 
+                                               left_indent=16, indent_top_row=True)
 
             # Compute the best value seen so far
             vals = self.task_group.values[self.objective['name']]
@@ -453,7 +456,8 @@ class DefaultChooser(object):
                 sys.stderr.write('\nNo feasible region found (yet).\n')
                 sys.stderr.write('Maximum probability of satisfying constraints = %f\n' % np.max(probs))
                 sys.stderr.write('At location:    ')
-                self.task_group.paramify_and_print(self.task_group.from_unit(best_probs_location).flatten(), left_indent=16)
+                self.task_group.paramify_and_print(self.task_group.from_unit(best_probs_location).flatten(), 
+                                                   left_indent=16)
                 
                 return None, best_probs_location
 

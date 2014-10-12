@@ -282,11 +282,16 @@ class TaskGroup(object):
         return self.dummy_task.paramify_and_print(*args, **kwargs)
 
     def paramify(self, data_vector):
+        """convert a data vector on the unit interval into a dict of dicts keyed by parameter names
+        
+        the values will be stored as, e.g. param["name"]["value"]
+        """
         return self.dummy_task.paramify(data_vector)
 
     def vectorify(self, params):
         return self.dummy_task.vectorify(params)
 
     def from_unit(self, U):
+        """remove the scaling for the parameters that keeps them in [0,1)""" 
         return self.dummy_task.from_unit(U)
 

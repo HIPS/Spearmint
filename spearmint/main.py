@@ -209,7 +209,7 @@ from spearmint.resources.resource import print_resources_status
 
 from spearmint.utils.parsing import parse_db_address
 
-def main():
+def get_options():
     parser = optparse.OptionParser(usage="usage: %prog [options] directory")
 
     parser.add_option("--config", dest="config_file",
@@ -231,13 +231,11 @@ def main():
         raise Exception("config.json did not load properly. Perhaps a spurious comma?")
     options["config"]  = commandline_kwargs.config_file
 
-    resources = parse_resources_from_config(options)
 
     # Set sensible defaults for options
     options['chooser']  = options.get('chooser', 'default_chooser')
     if 'tasks' not in options:
         options['tasks'] = {'main' : {'type' : 'OBJECTIVE', 'likelihood' : options.get('likelihood', 'GAUSSIAN')}}
-    experiment_name     = options.get("experiment-name", 'unnamed-experiment')
 
     # Set DB address
     db_address = parse_db_address(options)
@@ -251,15 +249,23 @@ def main():
                          "Aborting.\n" % (expt_dir))
         sys.exit(-1)
 
+    return options, expt_dir
+
+def main():
+    options, expt_dir = get_options()
+
+    resources = parse_resources_from_config(options)
+
     # Load up the chooser.
     chooser_module = importlib.import_module('spearmint.choosers.' + options['chooser'])
     chooser = chooser_module.init(options)
+    experiment_name     = options.get("experiment-name", 'unnamed-experiment')
 
     # Connect to the database
-    sys.stderr.write('Using database at %s.\n' % db_address)        
     db_address = options['database']['address']
+    sys.stderr.write('Using database at %s.\n' % db_address)        
     db         = MongoDB(database_address=db_address)
-
+    
     while True:
 
         for resource_name, resource in resources.iteritems():
