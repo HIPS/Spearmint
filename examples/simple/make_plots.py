@@ -12,6 +12,14 @@ from spearmint.utils.database.mongodb import MongoDB
 from spearmint.main import get_options, parse_resources_from_config, load_jobs, remove_broken_jobs, \
     load_task_group, load_hypers
 
+def print_dict(d, level=0):
+    if isinstance(d, dict):
+        print ""
+        for k, v in d.iteritems():
+            print "  "*level, k,
+            print_dict(v, level=level+1)
+    else:
+        print d 
 
 def main():
     options, expt_dir = get_options()
@@ -37,7 +45,6 @@ def main():
     print jobs
 
     resource = resources["Main"]
-    task = resource.tasks[0] # should be 'main'
     
     task_options = { task: options["tasks"][task] for task in resource.tasks }
     print task_options # {'main': {'likelihood': u'NOISELESS', 'type': 'OBJECTIVE'}}
@@ -50,6 +57,8 @@ def main():
     print hypers # from GP.to_dict()
     
     hypers = chooser.fit(task_group, hypers, task_options)
+    print "\nbest hypers"
+    print_dict(hypers)
 
     lp, x = chooser.best()
     x = x.flatten()
@@ -59,10 +68,14 @@ def main():
     
     # get the grid of points
     grid = chooser.grid
-#     print grid
     obj_model = chooser.models[chooser.objective['name']]
     obj_mean, obj_var = obj_model.function_over_hypers(obj_model.predict, grid)
-    
+
+    # un-normalize the function values and variances
+    obj_task = task_group.tasks['main']
+    obj_mean = [obj_task.unstandardize_mean(obj_task.unstandardize_variance(v)) for v in obj_mean]
+    obj_std = [obj_task.unstandardize_variance(np.sqrt(v)) for v in obj_var]
+
     
 #     for xy, m, v in izip(grid, obj_mean, obj_var):
 #         print xy, m, v
@@ -70,12 +83,12 @@ def main():
     grid = map(task_group.from_unit, grid)
 #     return
     
-    xymv = [(xy[0], xy[1], m, v) for xy, m, v in izip(grid, obj_mean, obj_var)]# if .2 < xy[0] < .25] 
+    xymv = [(xy[0], xy[1], m, v) for xy, m, v in izip(grid, obj_mean, obj_std)]# if .2 < xy[0] < .25] 
     
     x = map(lambda x:x[0], xymv)
     y = map(lambda x:x[1], xymv)
     m = map(lambda x:x[2], xymv)
-    sig = np.sqrt(map(lambda x:x[3], xymv))
+    sig = map(lambda x:x[3], xymv)
 #     print y
     
     fig = plt.figure(dpi=100)
@@ -91,10 +104,11 @@ def main():
     task = task_group.tasks['main']
     idata = task.valid_normalized_data_dict
     xy = idata["inputs"]
-    print xy
     xy = map(task_group.from_unit, xy)
     xy = np.array(xy)
     vals = idata["values"]
+    vals = [obj_task.unstandardize_mean(obj_task.unstandardize_variance(v)) for v in vals]
+
     print xy, vals
     ax.plot(xy[:,0], xy[:,1], vals, marker='o', color="r", linestyle="None")
     
