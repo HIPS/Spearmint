@@ -12,17 +12,19 @@ from spearmint.utils.database.mongodb import MongoDB
 from spearmint.main import get_options, parse_resources_from_config, load_jobs, remove_broken_jobs, \
     load_task_group, load_hypers
 
-def print_dict(d, level=0):
+def print_dict(d, level=1):
     if isinstance(d, dict):
-        print ""
+        if level > 1: print ""
         for k, v in d.iteritems():
-            print "  "*level, k,
+            print "  " * level, k,
             print_dict(v, level=level+1)
     else:
         print d 
 
 def main():
     options, expt_dir = get_options()
+    print "options:"
+    print_dict(options)
     
     # reduce the grid size
     options["grid_size"] = 400
@@ -32,6 +34,7 @@ def main():
     # Load up the chooser.
     chooser_module = importlib.import_module('spearmint.choosers.' + options['chooser'])
     chooser = chooser_module.init(options)
+    print "chooser", chooser
     experiment_name     = options.get("experiment-name", 'unnamed-experiment')
 
     # Connect to the database
@@ -42,22 +45,24 @@ def main():
     # testing below here
     jobs = load_jobs(db, experiment_name)
     remove_broken_jobs(db, jobs, experiment_name, resources)
-    print jobs
 
     resource = resources["Main"]
     
     task_options = { task: options["tasks"][task] for task in resource.tasks }
-    print task_options # {'main': {'likelihood': u'NOISELESS', 'type': 'OBJECTIVE'}}
+    print "task_options:"
+    print_dict(task_options) # {'main': {'likelihood': u'NOISELESS', 'type': 'OBJECTIVE'}}
     
     task_group = load_task_group(db, options, resource.tasks)
-    print task_group # TaskGroup
-    print "tasks", task_group.tasks # {'main': <spearmint.tasks.task.Task object at 0x10bf63290>}
+    print "task_group", task_group # TaskGroup
+    print "tasks:"
+    print_dict(task_group.tasks) # {'main': <spearmint.tasks.task.Task object at 0x10bf63290>}
+    
     
     hypers = load_hypers(db, experiment_name)
-    print hypers # from GP.to_dict()
+    print "loaded hypers", hypers # from GP.to_dict()
     
     hypers = chooser.fit(task_group, hypers, task_options)
-    print "\nbest hypers"
+    print "\nfitted hypers:"
     print_dict(hypers)
 
     lp, x = chooser.best()
@@ -68,6 +73,10 @@ def main():
     
     # get the grid of points
     grid = chooser.grid
+#     print "chooser objectives:", 
+#     print_dict(chooser.objective)
+    print "chooser models:", chooser.models
+    print_dict(chooser.models)
     obj_model = chooser.models[chooser.objective['name']]
     obj_mean, obj_var = obj_model.function_over_hypers(obj_model.predict, grid)
 
@@ -109,22 +118,11 @@ def main():
     vals = idata["values"]
     vals = [obj_task.unstandardize_mean(obj_task.unstandardize_variance(v)) for v in vals]
 
-    print xy, vals
     ax.plot(xy[:,0], xy[:,1], vals, marker='o', color="r", linestyle="None")
     
     plt.show()
     
 
     
-
-#     suggested_input = chooser.suggest()
-#     sys.stderr.flush()
-#     sys.stdout.flush()
-#     print suggested_input
-
-
-
-
-
 if __name__ == "__main__":
     main()
