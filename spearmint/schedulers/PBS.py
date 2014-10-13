@@ -196,11 +196,11 @@ def init(*args, **kwargs):
 # but can serve as an example for Torque queueing systems
 class PBSScheduler(AbstractClusterScheduler):
     def __init__(self, *args, **kwargs):
-    	self.pbsquery = PBSQuery()
+        self.pbsquery = PBSQuery()
         super(PBSScheduler, self).__init__(*args, **kwargs)
 
     def output_regexp(self):
-    	return r'(^\d+)'
+        return r'(^\d+)'
 
     def submit_command(self, output_file, job_name):
         # Note for posterity: ssh bint01 "source BLAH && qsub BLAH" doesn't work

@@ -184,15 +184,9 @@
 
 import sys
 import optparse
-import tempfile
-import datetime
-import subprocess
 import importlib
 import time
-import imp
 import os
-import re
-import pymongo
 
 import numpy as np
 
@@ -314,18 +308,21 @@ def main():
         if tired(db, experiment_name, resources):
             time.sleep(options.get('polling-time', 5))
 
-# Is main.py tired?
-# (Is it the case that no resources are accepting jobs?)
 def tired(db, experiment_name, resources):
+    """
+    return True if no resources are accepting jobs
+    """
     jobs = load_jobs(db, experiment_name)
     for resource_name, resource in resources.iteritems():
         if resource.acceptingJobs(jobs):
             return False
     return True
 
-# Look thorugh jobs and for those that are pending but not alive, set
-# their status to 'broken'
 def remove_broken_jobs(db, jobs, experiment_name, resources):
+    """
+    Look through jobs and for those that are pending but not alive, set
+    their status to 'broken'
+    """
     if jobs:
         for job in jobs:
             if job['status'] == 'pending':
@@ -412,6 +409,13 @@ def load_hypers(db, experiment_name):
     return db.load(experiment_name, 'hypers')
 
 def load_jobs(db, experiment_name):
+    """load the jobs from the database
+    
+    Retuns
+    ------
+    jobs : list
+        a list of jobs or an empty list
+    """
     jobs = db.load(experiment_name, 'jobs')
 
     if jobs is None:
@@ -422,6 +426,7 @@ def load_jobs(db, experiment_name):
     return jobs
 
 def save_job(job, db, experiment_name):
+    """save a job to the database"""
     db.save(job, experiment_name, 'jobs', {'id' : job['id']})
 
 def load_task_group(db, options, task_names=None):

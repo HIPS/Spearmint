@@ -192,6 +192,7 @@ def init(*args, **kwargs):
     return LocalScheduler(*args, **kwargs)
 
 class LocalScheduler(AbstractScheduler):
+    """scheduler which submits jobs to the local machine via a shell command"""
 
     def submit(self, job_id, experiment_name, experiment_dir, database_address):
         base_path = os.path.dirname(os.path.realpath(spearmint.__file__))

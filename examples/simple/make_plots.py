@@ -46,7 +46,9 @@ def main():
     jobs = load_jobs(db, experiment_name)
     remove_broken_jobs(db, jobs, experiment_name, resources)
 
-    resource = resources["Main"]
+    print "resources:", resources
+    print_dict(resources)
+    resource = resources.itervalues().next()
     
     task_options = { task: options["tasks"][task] for task in resource.tasks }
     print "task_options:"
