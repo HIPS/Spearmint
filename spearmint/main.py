@@ -411,8 +411,8 @@ def load_hypers(db, experiment_name):
 def load_jobs(db, experiment_name):
     """load the jobs from the database
     
-    Retuns
-    ------
+    Returns
+    -------
     jobs : list
         a list of jobs or an empty list
     """
