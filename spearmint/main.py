@@ -184,15 +184,9 @@
 
 import sys
 import optparse
-import tempfile
-import datetime
-import subprocess
 import importlib
 import time
-import imp
 import os
-import re
-import pymongo
 
 import numpy as np
 
@@ -209,7 +203,7 @@ from spearmint.resources.resource import print_resources_status
 
 from spearmint.utils.parsing import parse_db_address
 
-def main():
+def get_options():
     parser = optparse.OptionParser(usage="usage: %prog [options] directory")
 
     parser.add_option("--config", dest="config_file",
@@ -231,13 +225,11 @@ def main():
         raise Exception("config.json did not load properly. Perhaps a spurious comma?")
     options["config"]  = commandline_kwargs.config_file
 
-    resources = parse_resources_from_config(options)
 
     # Set sensible defaults for options
     options['chooser']  = options.get('chooser', 'default_chooser')
     if 'tasks' not in options:
         options['tasks'] = {'main' : {'type' : 'OBJECTIVE', 'likelihood' : options.get('likelihood', 'GAUSSIAN')}}
-    experiment_name     = options.get("experiment-name", 'unnamed-experiment')
 
     # Set DB address
     db_address = parse_db_address(options)
@@ -251,15 +243,23 @@ def main():
                          "Aborting.\n" % (expt_dir))
         sys.exit(-1)
 
+    return options, expt_dir
+
+def main():
+    options, expt_dir = get_options()
+
+    resources = parse_resources_from_config(options)
+
     # Load up the chooser.
     chooser_module = importlib.import_module('spearmint.choosers.' + options['chooser'])
     chooser = chooser_module.init(options)
+    experiment_name     = options.get("experiment-name", 'unnamed-experiment')
 
     # Connect to the database
-    sys.stderr.write('Using database at %s.\n' % db_address)        
     db_address = options['database']['address']
+    sys.stderr.write('Using database at %s.\n' % db_address)        
     db         = MongoDB(database_address=db_address)
-
+    
     while True:
 
         for resource_name, resource in resources.iteritems():
@@ -308,18 +308,21 @@ def main():
         if tired(db, experiment_name, resources):
             time.sleep(options.get('polling-time', 5))
 
-# Is main.py tired?
-# (Is it the case that no resources are accepting jobs?)
 def tired(db, experiment_name, resources):
+    """
+    return True if no resources are accepting jobs
+    """
     jobs = load_jobs(db, experiment_name)
     for resource_name, resource in resources.iteritems():
         if resource.acceptingJobs(jobs):
             return False
     return True
 
-# Look thorugh jobs and for those that are pending but not alive, set
-# their status to 'broken'
 def remove_broken_jobs(db, jobs, experiment_name, resources):
+    """
+    Look through jobs and for those that are pending but not alive, set
+    their status to 'broken'
+    """
     if jobs:
         for job in jobs:
             if job['status'] == 'pending':
@@ -406,6 +409,13 @@ def load_hypers(db, experiment_name):
     return db.load(experiment_name, 'hypers')
 
 def load_jobs(db, experiment_name):
+    """load the jobs from the database
+    
+    Returns
+    -------
+    jobs : list
+        a list of jobs or an empty list
+    """
     jobs = db.load(experiment_name, 'jobs')
 
     if jobs is None:
@@ -416,6 +426,7 @@ def load_jobs(db, experiment_name):
     return jobs
 
 def save_job(job, db, experiment_name):
+    """save a job to the database"""
     db.save(job, experiment_name, 'jobs', {'id' : job['id']})
 
 def load_task_group(db, options, task_names=None):

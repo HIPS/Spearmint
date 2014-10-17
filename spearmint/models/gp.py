@@ -207,6 +207,22 @@ DEFAULT_MCMC_ITERS = 10
 DEFAULT_BURNIN     = 100
 
 class GP(AbstractModel):
+    """Gaussian process model
+    
+    Parameters
+    ----------
+    num_dims : int
+    likelihood : str, optional
+        This string defines which likelihood to use.
+        Set the likelihood to `noiseless` to specify a noiseless likelihood.
+        Default is gaussian.
+    verbose : bool, optional
+    mcmc_diagnostics : bool, optional
+    mcmc_iters : int, optional
+    burnin : int, optional
+    thinning : int, optional
+    num_fantasies : int, optional
+    """
     def __init__(self, num_dims, **options):
         self.num_dims = num_dims
 
@@ -288,6 +304,8 @@ class GP(AbstractModel):
             self._cache_list.append(cache_dict)
 
     def _reset(self):
+        """reset the GP
+        """
         self._cache_list          = []
         self._fantasy_values_list = []
         self._hypers_list         = []
@@ -443,6 +461,7 @@ class GP(AbstractModel):
         self._set_params_from_dict(self._hypers_list[state])
 
     def to_dict(self):
+        """return a dictionary that saves the values of the hypers and the chain length"""
         gp_dict = {'hypers' : {}}
         for name, hyper in self.params.iteritems():
             gp_dict['hypers'][name] = hyper.value
@@ -452,10 +471,20 @@ class GP(AbstractModel):
         return gp_dict
 
     def from_dict(self, gp_dict):
+        """set the hyper parameter values and the chain length from a dict"""
         self._set_params_from_dict(gp_dict['hypers'])
         self.chain_length = gp_dict['chain length']
 
     def fit(self, inputs, values, pending=None, hypers=None, reburn=False, fit_hypers=True):
+        """return a set of hyperparameters after fitting the GP to the input and values
+        
+        inputs : 2d array
+            matrix of input data
+        values : 1d array
+            the values corresponding to the input data
+        hypers : dict 
+            initial values for the hyperparameters
+        """
         # Set the data for the GP
         self._inputs = inputs
         self._values = values
@@ -499,6 +528,10 @@ class GP(AbstractModel):
     def log_likelihood(self):
         """
         GP Marginal likelihood
+        
+        Notes
+        -----
+        This is called by the samplers when fitting the hyperparameters.
         """
         cov   = self.kernel.cov(self.observed_inputs)
         chol  = spla.cholesky(cov, lower=True)

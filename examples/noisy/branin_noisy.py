@@ -7,10 +7,11 @@ def branin(x, y):
          (5/math.pi)*x - 6) + 10*(1-(1./(8*math.pi)))*np.cos(x) + 10
     
     result = float(result)
+    noise = np.random.normal() * 50.
     
-    print 'Result = %f' % result
+    print 'Result = %f, noise %f, total %f' % (result, noise, result+noise)
     #time.sleep(np.random.randint(60))
-    return result
+    return result + noise
 
 # Write a function like this called 'main'
 def main(job_id, params):
