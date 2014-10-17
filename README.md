@@ -32,7 +32,7 @@ Spearmint implements a combination of the algorithms detailed in the following p
 
 **STEP 1: Installation**  
 
-1. Install [python](https://www.python.org/), [numpy](http://www.numpy.org/), [scipy](http://www.numpy.org/). For academic users, the [anaconda](http://continuum.io/downloads) distribution is great. Use numpy 1.8 or higher.  
+1. Install [python](https://www.python.org/), [numpy](http://www.numpy.org/), [scipy](http://www.numpy.org/). For academic users, the [anaconda](http://continuum.io/downloads) distribution is great. Use numpy 1.8 or higher. We use python 2.7.
 2. Download/clone the spearmint code  
 3. Install the spearmint package using pip: `pip install -e \</path/to/spearmint/root\>` (the -e means changes will be reflected automatically)  
 4. Download and install MongoDB: https://www.mongodb.org/   
@@ -40,7 +40,7 @@ Spearmint implements a combination of the algorithms detailed in the following p
 
 **STEP 2: Setting up your experiment**  
 1. Create a callable objective function. See ../examples/branin/branin.py as an example  
-2. Create a config file. There are 3 example config files in the ../examples directory.  
+2. Create a config file. There are 3 example config files in the ../examples directory. Note 1: There are more parameters that can be set in the config files than what is shown in the examples, but these parameters all have default values. Note 2: By default Spearmint assumes your function is noisy (non-deterministic). If it is noise-free, you should set this explicitly as in the ../examples/simple/config.json file.
 
 **STEP 3: Running spearmint**  
 1. Start up a MongoDB daemon instance:  

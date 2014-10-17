@@ -22,6 +22,15 @@ def print_dict(d, level=1):
         print d 
 
 def main():
+    """
+    Usage: python make_plots.py PATH_TO_DIRECTORY
+
+    TODO: Some aspects of this function are specific to the simple branin example
+    We should clean this up so that interpretation of plots are more clear and
+    so that it works in more general cases 
+    (e.g. if objective likelihood is binomial then values should not be
+    unstandardized)
+    """
     options, expt_dir = get_options()
     print "options:"
     print_dict(options)

@@ -3,7 +3,6 @@
     "main-file"       : "branin_noisy.py",
     "experiment-name" : "braninhoo_noisy",
     "likelihood"      : "GAUSSIAN",
-    "grid_size"       : 2000,
     "variables" : {
         "x" : {
             "type" : "FLOAT",
