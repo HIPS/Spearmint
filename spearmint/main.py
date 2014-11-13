@@ -213,7 +213,7 @@ def get_options():
     (commandline_kwargs, args) = parser.parse_args()
 
     # Read in the config file
-    expt_dir  = os.path.realpath(args[0])
+    expt_dir  = os.path.realpath(os.path.expanduser(args[0]))
     if not os.path.isdir(expt_dir):
         raise Exception("Cannot find directory %s" % expt_dir)
     expt_file = os.path.join(expt_dir, commandline_kwargs.config_file)
