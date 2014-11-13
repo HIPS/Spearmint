@@ -7,3 +7,4 @@ Contributor License Agreements.
 [kyunghyuncho](https://github.com/HIPS/Spearmint/pull/5)  
 Peter Sadowski (psadowsk@uci.edu)  
 Jacob Stevenson [js850](https://github.com/HIPS/Spearmint/pull/7)
+[lzamparo](https://github.com/HIPS/Spearmint/pull/9)
