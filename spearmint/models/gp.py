@@ -194,7 +194,7 @@ from ..utils.param            import Param as Hyperparameter
 from ..kernels                import Matern52, Noise, Scale, SumKernel, TransformKernel
 from ..sampling.slice_sampler import SliceSampler
 from ..utils                  import priors
-from ..transformations        import KumarWarp, Transformer
+from ..transformations        import BetaWarp, Transformer
 
 try:
     module = sys.modules['__main__'].__file__
@@ -316,9 +316,9 @@ class GP(AbstractModel):
 
     def _build(self):
         # Build the transformer
-        kumar_warp  = KumarWarp(self.num_dims)
+        beta_warp   = BetaWarp(self.num_dims)
         transformer = Transformer(self.num_dims)
-        transformer.add_layer(kumar_warp)
+        transformer.add_layer(beta_warp)
 
         # Build the component kernels
         input_kernel           = Matern52(self.num_dims)
@@ -344,14 +344,14 @@ class GP(AbstractModel):
         # Get the hyperparameters to sample
         ls                      = input_kernel.hypers
         amp2                    = scaled_input_kernel.hypers
-        kumar_alpha, kumar_beta = kumar_warp.hypers
+        beta_alpha, beta_beta = beta_warp.hypers
 
         self.params = {
-            'mean'        : self.mean,
-            'amp2'        : amp2,
-            'ls'          : ls,
-            'kumar_alpha' : kumar_alpha,
-            'kumar_beta'  : kumar_beta
+            'mean'       : self.mean,
+            'amp2'       : amp2,
+            'ls'         : ls,
+            'beta_alpha' : beta_alpha,
+            'beta_beta'  : beta_beta
         }
 
         # Build the samplers
@@ -362,7 +362,7 @@ class GP(AbstractModel):
             self.params.update({'noise' : noise})
             self._samplers.append(SliceSampler(self.mean, amp2, noise, compwise=False, thinning=self.thinning))
 
-        self._samplers.append(SliceSampler(ls, kumar_alpha, kumar_beta, compwise=True, thinning=self.thinning))
+        self._samplers.append(SliceSampler(ls, beta_alpha, beta_beta, compwise=True, thinning=self.thinning))
 
     def _burn_samples(self, num_samples):
         for i in xrange(num_samples):

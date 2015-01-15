@@ -201,7 +201,7 @@ from ..sampling.slice_sampler                import SliceSampler
 from ..sampling.whitened_prior_slice_sampler import WhitenedPriorSliceSampler
 from ..sampling.elliptical_slice_sampler     import EllipticalSliceSampler
 from ..utils                                 import priors
-from ..transformations                       import KumarWarp, Transformer
+from ..transformations                       import BetaWarp, Transformer
 
 try:
     module = sys.modules['__main__'].__file__
@@ -333,13 +333,13 @@ class GPClassifier(GP):
         self.latent_values = None
 
         # Build the transformer
-        kumar_warp                 = KumarWarp(self.num_dims)
-        kumar_alpha, kumar_beta    = kumar_warp.hypers
-        self.params['kumar_alpha'] = kumar_alpha
-        self.params['kumar_beta']  = kumar_beta
+        beta_warp                 = BetaWarp(self.num_dims)
+        beta_alpha, beta_beta    = beta_warp.hypers
+        self.params['beta_alpha'] = beta_alpha
+        self.params['beta_beta']  = beta_beta
 
         transformer = Transformer(self.num_dims)
-        transformer.add_layer(kumar_warp)
+        transformer.add_layer(beta_warp)
 
         # Build the component kernels
         input_kernel      = Matern52(self.num_dims)
@@ -379,7 +379,7 @@ class GPClassifier(GP):
         # Build the samplers
         to_sample = [self.mean] if self.noiseless else [self.mean, amp2]
         self._samplers.append(SliceSampler(*to_sample, compwise=False, thinning=self.thinning))
-        self._samplers.append(WhitenedPriorSliceSampler(ls, kumar_alpha, kumar_beta, compwise=True, thinning=self.thinning))
+        self._samplers.append(WhitenedPriorSliceSampler(ls, beta_alpha, beta_beta, compwise=True, thinning=self.thinning))
         self.latent_values_sampler = EllipticalSliceSampler(self.latent_values, thinning=self.ess_thinning)
 
     @property
