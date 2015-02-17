@@ -3,7 +3,8 @@ spearmint: Bayesian optimization codebase
 
 Spearmint is a software package to perform Bayesian optimization. The Software is designed to automatically run experiments (thus the code name spearmint) in a manner that iteratively adjusts a number of parameters so as to minimize some objective in as few runs as possible.
 
-## IMPORTANT: Spearmint is under an **Academic and Non-Commercial Research Use License**.  Before using spearmint please be aware of the [license](LICENSE.md).  If you do not qualify to use spearmint you can ask to obtain a license as detailed in the [license](LICENSE.md) or you can use the older open source code version (which is somewhat outdated) at https://github.com/JasperSnoek/spearmint.  
+## IMPORTANT: Please read about the license
+Spearmint is under an **Academic and Non-Commercial Research Use License**.  Before using spearmint please be aware of the [license](LICENSE.md).  If you do not qualify to use spearmint you can ask to obtain a license as detailed in the [license](LICENSE.md) or you can use the older open source code version (which is somewhat outdated) at https://github.com/JasperSnoek/spearmint.  
 
 ## IMPORTANT: You are off the main branch!
 This is the PESC branch. This branch contains the Predictive Entropy Search with Constraints (PESC) acquisition function, described in a paper soon to be posted on arXiv. Note: using PESC <i>without</i> constraints results in a method that is similar (but not exactly equivalent) to Predictive Entropy Search (http://arxiv.org/abs/1406.2541). This branch also comes with a basic 2D plotting routine. 
@@ -51,6 +52,7 @@ The PESC method used in this branch of Spearmint will appear on arXiv shortly; p
 
 ### STEP 4: Looking at your results
 Spearmint will output results to standard out / standard err and will also create output files in the experiment directory for each experiment. In addition, you can look at the results in the following ways:
+
 1. To print all results, run "python print_all_results.py \</path/to/experiment/directory\>"
 2. To create a plot showing the objective function decreasing over time, go to the "visualizations" directory and run "python progress_curve.py \</path/to/experiment/directory\>". The result will appear in a "plots" subdirectory of the experiment directory. If you look at the bottom of the progress curve file you will see a number of options such as plotting in the log scale, etc. 
 3. (2D objective functions only) To create plots of a 2D objective function (such as the examples provided), go to the visualizations directory and run "python plots_2d.py \</path/to/experiment/directory\>". They will appear in a "plots" subdirectory in the experiment directory.
