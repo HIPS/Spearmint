@@ -1,7 +1,8 @@
 {
     "language"        : "PYTHON",
-    "main-file"       : "branin_con",
+    "main_file"       : "branin_con",
     "experiment-name" : "branin-constrained-example",
+    "likelihood"      : "NOISELESS",
     "variables": {
         "X": {
             "type": "FLOAT",
@@ -19,17 +20,13 @@
     "tasks": {
       "branin" : {
           "type"        : "OBJECTIVE",
-          "likelihood"  : "NOISELESS"
       },
       "y_at_least_x" : {
           "type"        : "CONSTRAINT",
-          "likelihood"  : "NOISELESS"
       },
       "y_at_most_10" : {
           "type"        : "CONSTRAINT",
-          "likelihood"  : "NOISELESS"
       }
-    },
-    "polling-time" : 1
+    }
 }
 

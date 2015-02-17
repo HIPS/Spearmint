@@ -191,7 +191,7 @@ class AbstractTransformation(object):
 
     @property
     def hypers(self):
-        return None
+        return []
 
     @abstractmethod
     def forward_pass(self, inputs):

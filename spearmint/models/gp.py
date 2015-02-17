@@ -182,7 +182,6 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
-import sys
 import logging
 import numpy        as np
 import numpy.random as npr
@@ -191,49 +190,60 @@ import scipy.stats  as sps
 
 from .abstract_model          import AbstractModel
 from ..utils.param            import Param as Hyperparameter
-from ..kernels                import Matern52, Noise, Scale, SumKernel, TransformKernel
+import spearmint.kernels
+from ..kernels                import *
 from ..sampling.slice_sampler import SliceSampler
 from ..utils                  import priors
-from ..transformations        import BetaWarp, Transformer
+from ..                       import transformations
+from ..transformations        import Transformer   
 
-try:
-    module = sys.modules['__main__'].__file__
-    log    = logging.getLogger(module)
-except:
-    log    = logging.getLogger()
-    print 'Not running from main.'
 
-DEFAULT_MCMC_ITERS = 10
-DEFAULT_BURNIN     = 100
+# try:
+#     module = sys.modules['__main__'].__file__
+#     log    = logging.getLogger(module)
+# except:
+#     log    = logging.getLogger()
+#     print 'Not running from main.'
+
+
+OPTION_DEFAULTS = {
+    'verbose'           : False,
+    'mcmc_diagnostics'  : False,
+    'mcmc_iters'        : 10,
+    'burnin'            : 20,
+    'thinning'          : 0,
+    'num_fantasies'     : 1,
+    'caching'           : True,
+    'max_cache_mb'      : 256,
+    'likelihood'        : 'gaussian',
+    'kernel'            : 'Matern52',
+    'stability_jitter'  : 1e-6,
+    'fit_mean'          : True,
+    'fit_amp2'          : True,
+    'transformations'   : [],
+    'priors'            : [],
+    'initial_ls'        : 0.1,
+    'initial_mean'      : 0.0, # initial values of the hypers
+    'initial_amp2'      : 1.0,
+    'initial_noise'     : 0.0001
+}
 
 class GP(AbstractModel):
-    """Gaussian process model
     
-    Parameters
-    ----------
-    num_dims : int
-    likelihood : str, optional
-        This string defines which likelihood to use.
-        Set the likelihood to `noiseless` to specify a noiseless likelihood.
-        Default is gaussian.
-    verbose : bool, optional
-    mcmc_diagnostics : bool, optional
-    mcmc_iters : int, optional
-    burnin : int, optional
-    thinning : int, optional
-    num_fantasies : int, optional
-    """
     def __init__(self, num_dims, **options):
+        
+        opts = OPTION_DEFAULTS.copy()
+        opts.update(options)
+        if hasattr(self, 'options'):
+            opts.update(self.options)
+        # This is a bit of a mess. Basically to make it work with the GPClassifer --
+        # but yes I know the GP shouldn't have code for the sake of those who inherit from it
+        # TODO -- clean this up
+        self.options = opts
+
         self.num_dims = num_dims
 
-        self._set_likelihood(options)
-
-        log.debug('GP received initialization options: %s' % (options))
-        self.verbose          = bool(options.get("verbose", False))
-        self.mcmc_diagnostics = bool(options.get("mcmc_diagnostics", False))
-        self.mcmc_iters       = int(options.get("mcmc_iters", DEFAULT_MCMC_ITERS))
-        self.burnin           = int(options.get("burnin", DEFAULT_BURNIN))
-        self.thinning         = int(options.get("thinning", 0))
+        self.noiseless = self.options['likelihood'].lower() == "noiseless"
 
         self._inputs = None # Matrix of data inputs
         self._values = None # Vector of data values
@@ -242,56 +252,46 @@ class GP(AbstractModel):
 
         self.params = None
 
-        # Default to using the mean prediction for fantasies
-        self.num_fantasies = options.get('num_fantasies', 1)  # TODO -- make in config
-
-        self._caching                    = bool(options.get("caching", True))
         self._cache_list                 = [] # Cached computations for re-use.
         self._hypers_list                = [] # Hyperparameter dicts for each state.
         self._fantasy_values_list        = [] # Fantasy values generated from pending samples.
         self.state                       = None
         self._random_state               = npr.get_state()
         self._samplers                   = []
+
+        # If you are only doing one fantasy of pending jobs, then don't even both sampling
+        # it from the marginal gaussian posterior predictive and instead just take
+        # the mean of this distribution. This only has an effect if num_fantasies is 1
         self._use_mean_if_single_fantasy = True
         
+        # get the Kernel type from the options
+        try:
+            self.input_kernel_class = getattr(spearmint.kernels, self.options['kernel'])
+        except NameError:
+            raise Exception("Unknown kernel: %s" % self.options['kernel'])
+
         self._kernel            = None
         self._kernel_with_noise = None
 
         self.num_states   = 0
         self.chain_length = 0
 
-        self.max_cache_mb    = 256 # TODO -- make in config
-        self.max_cache_bytes = self.max_cache_mb*1024*1024
+        self.max_cache_bytes = self.options['max_cache_mb']*1024*1024
 
         self._build()
 
-    def _set_likelihood(self, options):
-        self.likelihood = options.get('likelihood', 'gaussian').lower()
-
-        if self.likelihood == "noiseless":
-            self.noiseless = True
-        else:
-            self.noiseless = False
-
     def _set_params_from_dict(self, hypers_dict):
-        for name, hyper in self.params.iteritems():
-            self.params[name].value = hypers_dict[name]
-
-    def _reset_params(self):
-        for param in self.params.values():
-            param.value = param.initial_value
-
-    def _pull_from_cache_or_compute(self):
-        if self.caching and len(self._cache_list) == self.num_states:
-            chol  = self._cache_list[self.state]['chol']
-            alpha = self._cache_list[self.state]['alpha']
-        else:
-            chol  = spla.cholesky(self.kernel.cov(self.inputs), lower=True)
-            alpha = spla.cho_solve((chol, True), self.values - self.mean.value)
-
-        return chol, alpha
+        # for name, hyper in self.params.iteritems():
+        # doing it the above way is worse-- because if you changed the config
+        # to add hyperparameters, they won't be found in the hypers_dict. 
+        # this way is more robust
+        for name, hyper in hypers_dict.iteritems():
+            if name in self.params:
+                self.params[name].value = hypers_dict[name]
 
     def _prepare_cache(self):
+        self._cache_list = list()
+
         inputs_hash = hash(self.inputs.tostring())
         for i in xrange(self.num_states):
             self.set_state(i)
@@ -303,76 +303,120 @@ class GP(AbstractModel):
             }
             self._cache_list.append(cache_dict)
 
-    def _reset(self):
-        """reset the GP
-        """
-        self._cache_list          = []
-        self._fantasy_values_list = []
-        self._hypers_list         = []
-        
-        self._reset_params()
-        self.chain_length = 0
-            
+
+    def jitter_value(self):
+        return self.stability_noise_kernel.noise.value
+
+    def noise_value(self):
+        if self.noiseless:
+            return self.stability_noise_kernel.noise.value
+        else:
+            return self.params['noise'].value
 
     def _build(self):
-        # Build the transformer
-        beta_warp   = BetaWarp(self.num_dims)
+        self.params = dict()
+
+        # these should be in the right order because the json was parsed with an orderedDict
+        # could make this more robust by using a list instead...
         transformer = Transformer(self.num_dims)
-        transformer.add_layer(beta_warp)
+
+        for trans in self.options['transformations']:
+            assert len(trans) == 1 # this is the convention-- a list of length-1 dicts
+            trans_class = trans.keys()[0]
+            trans_options = trans.values()[0]
+            T = getattr(transformations,trans_class)(self.num_dims, **trans_options)
+            transformer.add_layer(T)
+            self.params.update({param.name:param for param in T.hypers})
+        # Default is BetaWarp (set in main.py)
+        # else: # default uses BetaWarp
+            # beta_warp = BetaWarp(self.num_dims)
+            # transformer.add_layer(beta_warp)
+            # self.params.update({param.name:param} for param in beta_warp.hypers)
 
         # Build the component kernels
-        input_kernel           = Matern52(self.num_dims)
-        stability_noise_kernel = Noise(self.num_dims) # Even if noiseless we use some noise for stability
-        scaled_input_kernel    = Scale(input_kernel)
-        sum_kernel             = SumKernel(scaled_input_kernel, stability_noise_kernel)
-        noise_kernel           = Noise(self.num_dims)
+        # length_scale_prior = priors.Scale(priors.Beta(1.5, 5.0), 10.0)
+        # length_scale_prior = priors.Scale(priors.Beta(1.5, 7.0), 5.0) # smaller
+        length_scale_prior = priors.Scale(priors.Beta(0.5, 7.0), 5.0)   # even smaller
+        # length_scale_prior = None
+
+        # set initial/default length scale value to be an array. we can't do this in advance
+        # because we don't know the size of the GP yet. 
+        if self.options['initial_ls'] is not None and isinstance(self.options['initial_ls'], float):
+            initial_ls_value = np.ones(self.num_dims) * self.options['initial_ls']
+        else:
+            initial_ls_value = self.options['initial_ls']
+
+        input_kernel             = self.input_kernel_class(self.num_dims, prior=length_scale_prior, value=initial_ls_value)
+        self.scaled_input_kernel = Scale(input_kernel, value=self.options['initial_amp2'])
+        self.stability_noise_kernel = Noise(self.num_dims, name='stability_jitter', value=self.options['stability_jitter']) # Even if noiseless we use some noise for stability
+        sum_kernel               = SumKernel(self.scaled_input_kernel, self.stability_noise_kernel)
 
         # The final kernel applies the transformation.
         self._kernel = TransformKernel(sum_kernel, transformer)
 
         # Finally make a noisy version if necessary
         if not self.noiseless:
+            noise_kernel = Noise(self.num_dims, value=self.options['initial_noise'])
             self._kernel_with_noise = SumKernel(self._kernel, noise_kernel)
 
         # Build the mean function (just a constant mean for now)
         self.mean = Hyperparameter(
-            initial_value = 0.0,
+            initial_value = self.options['initial_mean'],
             prior         = priors.Gaussian(0.0,1.0),
             name          = 'mean'
         )
 
-        # Get the hyperparameters to sample
-        ls                      = input_kernel.hypers
-        amp2                    = scaled_input_kernel.hypers
-        beta_alpha, beta_beta = beta_warp.hypers
+        self.params['ls'] = input_kernel.hypers
 
-        self.params = {
-            'mean'       : self.mean,
-            'amp2'       : amp2,
-            'ls'         : ls,
-            'beta_alpha' : beta_alpha,
-            'beta_beta'  : beta_beta
-        }
+        # Slice sample all params with compwise=True, except for mean,amp2,(noise) handled below
+        self._samplers.append(SliceSampler(*self.params.values(), compwise=True, thinning=self.options['thinning']))
 
-        # Build the samplers
-        if self.noiseless:
-            self._samplers.append(SliceSampler(self.mean, amp2, compwise=False, thinning=self.thinning))
-        else:
-            noise = noise_kernel.hypers
-            self.params.update({'noise' : noise})
-            self._samplers.append(SliceSampler(self.mean, amp2, noise, compwise=False, thinning=self.thinning))
+        amp2 = self.scaled_input_kernel.hypers
+        self.params['amp2'] = amp2 # stick it in params because PESC examines this
+        # i guess it doesn't really matter if it is in params, what matters it toSample
 
-        self._samplers.append(SliceSampler(ls, beta_alpha, beta_beta, compwise=True, thinning=self.thinning))
-
+        toSample = list()
+        if self.options['fit_amp2']:
+            toSample.append(amp2)
+        if self.options['fit_mean']:
+            self.params['mean'] = self.mean
+            toSample.append(self.mean)        
+        if not self.noiseless:
+            self.params['noise'] = noise_kernel.noise
+            toSample.append(noise_kernel.noise)
+        
+        if len(toSample) > 0:
+            self._samplers.append(SliceSampler(*toSample, compwise=False, thinning=self.options['thinning']))
+       
     def _burn_samples(self, num_samples):
+        if num_samples == 0:
+            return
+
+        # logging.debug('GPClassifer: burning %s: ' % ', '.join(self.params.keys()))
+        # logging.debug('%05d/%05d' % (0, num_samples))
+
+        logging.debug('  Burning %d samples...' % num_samples)
+
         for i in xrange(num_samples):
+            # if self.options['verbose']:
+                # logging.debug('\b'*11+'%05d/%05d' % (i, num_samples))
+            
             for sampler in self._samplers:
                 sampler.sample(self)
 
             self.chain_length += 1
 
+        # if self.options['verbose']:
+            # logging.debug('\n')
+
+
     def _collect_samples(self, num_samples):
         hypers_list = []
+
+        for sampler in self._samplers:
+            logging.debug('  Sampling %d samples of %s with %s' % (num_samples, ', '.join(['%s(%d)'%(param.name, param.size()) for param in sampler.params]), sampler.__class__.__name__))
+        logging.debug('')
+
         for i in xrange(num_samples):
             for sampler in self._samplers:
                 sampler.sample(self)
@@ -380,7 +424,7 @@ class GP(AbstractModel):
             hypers_list.append(self.to_dict()['hypers'])
             self.chain_length += 1
 
-        return hypers_list
+        self._hypers_list = hypers_list
 
     def _collect_fantasies(self, pending):
         fantasy_values_list = []
@@ -394,19 +438,20 @@ class GP(AbstractModel):
         return fantasy_values_list
 
     def _fantasize(self, pend):
-        if self._use_mean_if_single_fantasy and self.num_fantasies == 1:
+        if self._use_mean_if_single_fantasy and self.options['num_fantasies'] == 1:
             predicted_mean, cov = self.predict(pend)
             return predicted_mean
         else:
             npr.set_state(self._random_state)
-            return self.sample_from_posterior_given_hypers_and_data(pend, self.num_fantasies)
+            return self.sample_from_posterior_given_hypers_and_data(pend, self.options['num_fantasies'])
 
     @property
     def inputs(self):
         if self.pending is None or len(self._fantasy_values_list) < self.num_states:
             return self._inputs
-            
-        return np.vstack((self._inputs, self.pending)) # Could perhaps cache this to make it faster.
+        else:
+            return np.vstack((self._inputs, self.pending)) # Could perhaps cache this to make it faster.
+
 
     @property
     def observed_inputs(self):
@@ -417,10 +462,10 @@ class GP(AbstractModel):
         if self.pending is None or len(self._fantasy_values_list) < self.num_states:
             return self._values
         
-        if self.num_fantasies == 1:
+        if self.options['num_fantasies'] == 1:
             return np.append(self._values, self._fantasy_values_list[self.state].flatten(), axis=0)
         else:
-            return np.append(np.tile(self._values[:,None], (1,self.num_fantasies)), self._fantasy_values_list[self.state], axis=0)
+            return np.append(np.tile(self._values[:,None], (1,self.options['num_fantasies'])), self._fantasy_values_list[self.state], axis=0)
 
     @property
     def observed_values(self):
@@ -439,18 +484,17 @@ class GP(AbstractModel):
 
     @property
     def has_data(self):
-        return self.inputs is not None
+        return self.observed_inputs is not None and self.observed_inputs.size > 0
 
-    @property
     def caching(self):
-        if not self._caching or self.num_states <= 0:
+        if not self.options['caching'] or self.num_states <= 0:
             return False
 
         # For now this only computes the cost of storing the Cholesky decompositions.
         cache_mem_usage = (self._inputs.shape[0]**2) * self.num_states * 8. # Each double is 8 bytes.
 
         if cache_mem_usage > self.max_cache_bytes:
-            sys.stderr.write('Max memory limit of %d bytes reached. Not caching intermediate computations.' % self.max_cache_bytes)
+            logging.debug('Max memory limit of %d bytes reached. Not caching intermediate computations.' % self.max_cache_bytes)
 
             return False
 
@@ -461,63 +505,73 @@ class GP(AbstractModel):
         self._set_params_from_dict(self._hypers_list[state])
 
     def to_dict(self):
-        """return a dictionary that saves the values of the hypers and the chain length"""
         gp_dict = {'hypers' : {}}
         for name, hyper in self.params.iteritems():
             gp_dict['hypers'][name] = hyper.value
 
+        # I don't understand why this is stored...? as soon as you call fit
+        # it gets set to 0 anyway.
         gp_dict['chain length'] = self.chain_length
 
         return gp_dict
 
     def from_dict(self, gp_dict):
-        """set the hyper parameter values and the chain length from a dict"""
         self._set_params_from_dict(gp_dict['hypers'])
         self.chain_length = gp_dict['chain length']
 
+    def reset_params(self):
+        for param in self.params.values():
+            param.reset_value() # set to default
+
+    # if fit_hypers is False, then we do not perform MCMC and use whatever we have
+    # in other words, we are just changing setting the data if fit_hypers is False
     def fit(self, inputs, values, pending=None, hypers=None, reburn=False, fit_hypers=True):
-        """return a set of hyperparameters after fitting the GP to the input and values
-        
-        inputs : 2d array
-            matrix of input data
-        values : 1d array
-            the values corresponding to the input data
-        hypers : dict 
-            initial values for the hyperparameters
-        """
         # Set the data for the GP
         self._inputs = inputs
         self._values = values
 
-        # Reset the GP
-        self._reset()
+        if self.options['mcmc_iters'] == 0: # do not do MCMC
+            fit_hypers = False
 
-        # Initialize the GP with hypers if provided
+        self._fantasy_values_list = []  # fantasy of pendings
+
+        # Initialize the GP with hypers if provided, or else set them to their default
         if hypers:
             self.from_dict(hypers)
+        else:
+            self.reset_params()
 
         if fit_hypers:
-            # Burn samples (if needed)
-            num_samples = self.burnin if reburn or self.chain_length < self.burnin else 0
-            self._burn_samples(num_samples)
+            # self._hypers_list = []  # samples hypers
+            # self._cache_list  = []  # caching cholesky
+            self.chain_length = 0   # chain of hypers
 
-            # Now collect some samples
-            self._hypers_list = self._collect_samples(self.mcmc_iters)
+            # Burn samples (if needed)
+            num_samples_to_burn = self.options['burnin'] if reburn or self.chain_length < self.options['burnin'] else 0
+            self._burn_samples(num_samples_to_burn)
+
+            # Now collect some samples (sets self._hypers_list)
+            self._collect_samples(self.options['mcmc_iters'])
 
             # Now we have more states
-            self.num_states = self.mcmc_iters
-        elif not self._hypers_list:
-            # Just use the current hypers as the only state
-            self._hypers_list = [self.to_dict()['hypers']]
-            self.num_states  = 1
+            self.num_states = self.options['mcmc_iters']
+        else:
+            if len(self._hypers_list) == 0:
+                # Just use the current hypers as the only state
+                self._hypers_list = [self.to_dict()['hypers']]
+                self.num_states  = 1
+
+        self._cache_list  = []  # i think you need to do this before collecting fantasies...
 
         # Set pending data and generate corresponding fantasies
         if pending is not None:
             self.pending              = pending
             self._fantasy_values_list = self._collect_fantasies(pending)
 
-        # Get caching ready
-        if self.caching:
+        # Actually compute the cholesky and all that stuff -- this is the "fitting"
+        # If there is new data (e.g. pending stuff) but fit_hypers is False
+        # we still want to do this... because e.g. new pending stuff does change the cholesky. 
+        if self.caching() and self.has_data:
             self._prepare_cache()
 
         # Set the hypers to the final state of the chain
@@ -528,33 +582,44 @@ class GP(AbstractModel):
     def log_likelihood(self):
         """
         GP Marginal likelihood
-        
-        Notes
-        -----
-        This is called by the samplers when fitting the hyperparameters.
         """
+        if not self.has_data:
+            return 0.0
+
+        # cannot do caching of chol here because we are evaluating different length scales
+        # -- nothing to cache yet
         cov   = self.kernel.cov(self.observed_inputs)
         chol  = spla.cholesky(cov, lower=True)
         solve = spla.cho_solve((chol, True), self.observed_values - self.mean.value)
 
+        complexity_penalty = -np.sum(np.log(np.diag(chol)))
+        data_fit_term = -0.5*np.dot(self.observed_values - self.mean.value, solve)
+        return complexity_penalty + data_fit_term
         # Uses the identity that log det A = log prod diag chol A = sum log diag chol A
-        return -np.sum(np.log(np.diag(chol)))-0.5*np.dot(self.observed_values - self.mean.value, solve)
+        # return -np.sum(np.log(np.diag(chol)))-0.5*np.dot(self.observed_values - self.mean.value, solve)
 
+    # cholK is only used for the Predictive Entropy Search acquisition function
+    # Please ignore it otherwise...
     def predict(self, pred, full_cov=False, compute_grad=False):
         inputs = self.inputs
         values = self.values
 
-        # Special case if there is no data yet (everything from the prior)
-        if inputs is None:
-            return self.predict_from_prior(pred, full_cov, compute_grad)
-
         if pred.shape[1] != self.num_dims:
-            raise Exception("Dimensionality of inputs must match dimensionality given at init time.")
+            raise Exception("Dimensionality of test points is %d but dimensionality given at init time is %d." % (pred.shape[1], self.num_dims))
+
+        # Special case if there is no data yet --> predict from the prior
+        if not self.has_data:
+            return self.predict_from_prior(pred, full_cov, compute_grad)
 
         # The primary covariances for prediction.
         cand_cross = self.noiseless_kernel.cross_cov(inputs, pred)
         
-        chol, alpha = self._pull_from_cache_or_compute()
+        if self.caching() and len(self._cache_list) == self.num_states:
+            chol  = self._cache_list[self.state]['chol']
+            alpha = self._cache_list[self.state]['alpha']
+        else:
+            chol  = spla.cholesky(self.kernel.cov(self.inputs), lower=True)
+            alpha = spla.cho_solve((chol, True), self.values - self.mean.value)
 
         # Solve the linear systems.
         # Note: if X = LL^T, cho_solve performs X\b whereas solve_triangular performs L\b
@@ -569,7 +634,7 @@ class GP(AbstractModel):
             cand_cov = self.noiseless_kernel.cov(pred)
             func_v = cand_cov - np.dot(beta.T, beta)
         else:
-            cand_cov = self.noiseless_kernel.diag_cov(pred)
+            cand_cov = self.noiseless_kernel.diag_cov(pred) # it is slow to generate this diagonal matrix... for stationary kernels you don't need to do this
             func_v = cand_cov - np.sum(beta**2, axis=0)
 
         if not compute_grad:
@@ -680,7 +745,7 @@ class GP(AbstractModel):
 
     # pi = probability that the latent function value is greater than or equal to C
     # This is evaluated separately at each location in pred
-    def pi(self, pred, C=0, compute_grad=False):
+    def pi(self, pred, compute_grad=False, C=0):
         if not compute_grad:
             mean, sigma2 = self.predict(pred, compute_grad=False)
         else:
@@ -690,7 +755,7 @@ class GP(AbstractModel):
         C_minus_m = C-mean
 
         # norm.sf = 1 - norm.cdf
-        prob = sps.norm.sf(C_minus_m/sigma)
+        prob = sps.norm.sf(C_minus_m/sigma)  
 
         if not compute_grad:
             return prob

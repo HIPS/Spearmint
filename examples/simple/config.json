@@ -1,6 +1,6 @@
 {
     "language"        : "PYTHON",
-    "main-file"       : "branin.py",
+    "main_file"       : "branin.py",
     "experiment-name" : "simple-braninhoo-example",
     "likelihood"      : "NOISELESS",
     "variables" : {

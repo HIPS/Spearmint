@@ -208,12 +208,11 @@ class AbstractClusterScheduler(object):
     def output_regexp(self):
         pass
 
-
-    def submit(self, job_id, experiment_name, experiment_dir, database_address):
+    def submit(self, job_id, experiment_name, experiment_dir, database_address, output_directory):
         base_path = os.path.dirname(os.path.realpath(spearmint.__file__))
         run_command = '#!/bin/bash\n'
         if "environment-file" in self.options:
-            run_command += 'source %s\n' % self.options["environment-file"]
+          run_command += 'source %s\n' % self.options["environment-file"]
         run_command += 'cd %s\n' % base_path
         run_command += 'python launcher.py --database-address=%s --experiment-name=%s --job-id=%s %s' % \
                (database_address, experiment_name, job_id, experiment_dir)
@@ -223,18 +222,20 @@ class AbstractClusterScheduler(object):
         if database_address == "localhost":
             database_address = socket.gethostname()
 
-        output_directory = os.path.join(experiment_dir, 'output')
-        if not os.path.isdir(output_directory):
-            os.mkdir(output_directory)
-
-        # allow the user to specify a subdirectory for the output
-        if "output-subdir" in self.options:
-            output_directory = os.path.join(output_directory, self.options['output-subdir'])
+        if output_directory is not None:
             if not os.path.isdir(output_directory):
                 os.mkdir(output_directory)
 
-        output_filename = os.path.join(output_directory, '%08d.out' % job_id)
-        output_file = open(output_filename, 'w')
+            # allow the user to specify a subdirectory for the output
+            if "output-subdir" in self.options:
+                output_directory = os.path.join(output_directory, self.options['output-subdir'])
+                if not os.path.isdir(output_directory):
+                    os.mkdir(output_directory)
+
+            output_filename = os.path.join(output_directory, '%08d.out' % job_id)
+            output_file = open(output_filename, 'w')
+        else:
+            output_file = open(os.devnull, 'wb')
 
         submit_command = self.submit_command(output_filename, '%s-%08d' % (experiment_name, job_id))
         if 'scheduler-args' in self.options:
@@ -246,6 +247,7 @@ class AbstractClusterScheduler(object):
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, 
                                 shell=True)
+
         output, std_err = process.communicate(input=run_command)
         process.stdin.close()
 

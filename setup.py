@@ -16,6 +16,7 @@ setup(
     description = ("A package for Bayesian optimization."),
     keywords = "Bayesian Optimization, Magic, Minty Freshness",
     packages=['spearmint',
+              'spearmint.acquisition_functions',
               'spearmint.choosers',
               'spearmint.grids',
               'spearmint.kernels',
@@ -26,6 +27,7 @@ setup(
               'spearmint.tasks',
               'spearmint.transformations',
               'spearmint.utils',
+              'spearmint.visualizations',
               'spearmint.utils.database',],
     long_description=read('README.md'),
 )

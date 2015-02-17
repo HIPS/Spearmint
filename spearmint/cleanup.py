@@ -182,99 +182,47 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
-import numpy        as np
-import numpy.random as npr
 
-from spearmint.models import GP
+import os
+import sys
+import pymongo
+import json
+import shutil
+from spearmint.utils.parsing import parse_config_file
+from spearmint.utils.parsing import repeat_experiment_name
+from spearmint.utils.parsing import repeat_output_dir
 
-def test_gp_init():
-    gp = GP(5)
+def cleanup(path, repeat=-1):
 
-def test_fit():
-    npr.seed(1)
+    if not os.path.isdir(path):
+        raise Exception("%s is not a valid directory" % path)
 
-    N = 10
-    D = 5
+    cfg = parse_config_file(path, 'config.json', verbose=False)
 
-    gp = GP(D, burnin=5)
-    
-    inputs  = npr.rand(N,D)
-    pending = npr.rand(3,D)
-    W       = npr.randn(D,1)
-    vals    = inputs.dot(W).flatten() + np.sqrt(1e-3)*npr.randn(N)
+    db_address = cfg['database']['address']  
+    client = pymongo.MongoClient(db_address)
 
-    gp.fit(inputs, vals, pending)
+    experiment_name = cfg["experiment-name"]
 
-    assert gp.chain_length == 15
-    assert all([np.all(p.value != p.initial_value) for p in gp.params.values()])
-    assert len(gp._cache_list) == 10
-    assert len(gp._hypers_list) == 10
-    assert len(gp._fantasy_values_list) == 10
+    if repeat >= 0:
+        experiment_name = repeat_experiment_name(experiment_name, repeat)
 
-def test_predict():
-    npr.seed(1)
+    print 'Cleaning up experiment %s in database at %s' % (experiment_name, db_address)
 
-    N     = 10
-    Npend = 3
-    Ntest = 2
-    D     = 5
+    db = client.spearmint[experiment_name]
+    db['jobs'].drop()
+    db['hypers'].drop()
+    db['recommendations'].drop()
 
-    gp   = GP(D, burnin=5, num_fantasies=7)
-    pred = npr.rand(Ntest,D)
+    # remove output files
+    output_directory = repeat_output_dir(path, repeat) if repeat >= 0 else os.path.join(path, 'output')
+    if os.path.isdir(output_directory):
+        shutil.rmtree(output_directory)
 
-    # Test with 0 points
-    mu, v = gp.predict(pred)
-    np.testing.assert_allclose(mu, 0, rtol=1e-7, atol=0, err_msg='', verbose=True)
-    np.testing.assert_allclose(v, 1+1e-6, rtol=1e-7, atol=0, err_msg='', verbose=True)
+    # remove plots
+    plots_directory = os.path.join(path, 'plots')
+    if os.path.isdir(plots_directory):
+        shutil.rmtree(plots_directory)
 
-    #Test with 1 point
-    X   = np.zeros((1,D))
-    W   = npr.randn(D,1)
-    val = X.dot(W).flatten() + np.sqrt(1e-3)*npr.randn()
-
-    gp.fit(X, val, fit_hypers=False)
-
-    mu, v = gp.predict(pred)
-    
-    # Points closer to the origin will have less variance
-    if np.linalg.norm(pred[0] - X) < np.linalg.norm(pred[1] - X):
-        assert v[0] < v[1]
-    else:
-        assert v[0] > v[1]
-    
-    # Predict at the point itself
-    mu, v = gp.predict(X)
-    np.testing.assert_allclose(mu, val, rtol=1e-5, atol=0, err_msg='', verbose=True)
-
-    # Now let's make sure it doesn't break with more data and pending
-    inputs  = npr.rand(N,D)
-    vals    = inputs.dot(W).flatten() + np.sqrt(1e-3)*npr.randn(N)
-    pending = npr.rand(Npend,D)
-
-    gp.fit(inputs, vals, pending)
-
-    mu, v = gp.predict(pred)
-
-    # Now let's check the gradients
-    eps = 1e-5
-
-    mu, v, dmu, dv = gp.predict(pred, compute_grad=True)
-
-    # The implied loss is np.sum(mu**2) + np.sum(v**2)
-    dloss = 2*(dmu*mu[:,np.newaxis,:]).sum(2) + 2*(v[:,np.newaxis,np.newaxis]*dv).sum(2)
-
-    dloss_est = np.zeros(dloss.shape)
-    for i in xrange(Ntest):
-        for j in xrange(D):
-            pred[i,j] += eps
-            mu, v = gp.predict(pred)
-            loss_1 = np.sum(mu**2) + np.sum(v**2)
-            pred[i,j] -= 2*eps
-            mu, v = gp.predict(pred)
-            loss_2 = np.sum(mu**2) + np.sum(v**2)
-            pred[i,j] += eps
-            dloss_est[i,j] = ((loss_1 - loss_2) / (2*eps))
-
-    assert np.linalg.norm(dloss - dloss_est) < 1e-6
-
-
+if __name__ == '__main__':
+    cleanup(*sys.argv[1:])

@@ -183,115 +183,21 @@
 # its Institution.
 
 
-import copy
-import numpy as np
 
-from collections import OrderedDict
+import numpy          as np
+import scipy.stats    as sps
 
-from .task import Task
+# Compute log of the normal CDF of x in a robust way
+# Based on the fact that log(cdf(x)) = log(1-cdf(-x))
+# and log(1-z) ~ -z when z is small, so  this is approximately
+# -cdf(-x), which is just the same as -sf(x) in scipy
+def logcdf_robust(x):
+    if isinstance(x, np.ndarray):
+        ret = sps.norm.logcdf(x)
+        ret[x > 5] = -sps.norm.sf(x[x > 5])
+    elif x > 5:
+        ret = -sps.norm.sf(x)
+    else:
+        ret = sps.norm.logcdf(x)
 
-
-class TaskGroup(object):
-    """
-    A task group is a group of tasks that share underlying data. The task group
-    is responsible for storing all of this data, while the underlying tasks will
-    give different views of the data.
-
-    For now the only view type is that the tasks will by default not return data
-    when the associated values are nan.
-    """
-    
-    def __init__(self, tasks_config, variables_config):
-        self.tasks = {}
-        for task_name, task_options in tasks_config.iteritems():
-            self.tasks[task_name] = Task(task_name,
-                                         task_options,
-                                         variables_config)
-
-        self.dummy_task = Task('dummy', {'type': 'dummy'}, variables_config)
-
-        #TODO: Validate the data
-        self._inputs  = np.zeros((0,self.num_dims))#np.array([])
-        self._pending = np.zeros((0,self.num_dims))#np.array([])
-        self._values  = np.zeros((0,self.num_dims))#np.array([])
-        self._costs   = np.zeros((0,self.num_dims))#np.array([])
-
-        self.variables_config = copy.copy(variables_config)
-
-    @property
-    def num_dims(self):
-        return self.dummy_task.num_dims
-
-    @property
-    def inputs(self):
-        return self._inputs
-
-    @inputs.setter
-    def inputs(self, inputs):
-        self._inputs = inputs
-        for task in self.tasks.values():
-            task.inputs = inputs
-
-    @property
-    def pending(self):
-        return self._pending
-
-    @pending.setter
-    def pending(self, pending):
-        self._pending = pending
-        for task in self.tasks.values():
-            task.pending = pending
-
-    @property
-    def values(self):
-        """return a dictionary of the task values keyed by task name"""
-        return {task_name : task.values for task_name, task in self.tasks.iteritems()}
-
-    @values.setter
-    def values(self, values):
-        self._values = values
-        for task_name in self.tasks:
-            task        = self.tasks[task_name]
-            task.values = values[task_name]
-
-    def add_nan_task_if_nans(self):
-        valids = np.vstack([vals for vals in self.values.values()]).sum(0)
-
-        if np.any(np.isnan(valids)):
-                
-            # First, see if all the tasks currently in this group are noiseless
-            # If so, we should make the NaN task noiseless also
-            # This is important because if a NaN constraint unnecessarily
-            # thinks it's non-deterministic it could take MUCH longer to pass
-            # the confidence threshold
-            all_noiseless = True
-            for task_name in self.tasks:
-                if self.tasks[task_name].options.get('likelihood', 'gaussian').lower() != 'noiseless':
-                    all_noiseless = False
-                    break
-            nan_likelihood = 'STEP' if all_noiseless else 'BINOMIAL'
-
-            nan_task         = Task('NaN', {'type' : 'CONSTRAINT', 'likelihood' : nan_likelihood}, self.variables_config)
-            nan_task.inputs  = self._inputs
-            nan_task.pending = self._pending
-            nan_task.values  = np.logical_not(np.isnan(valids))
-
-            self.tasks['NaN'] = nan_task
-
-    def paramify_and_print(self, *args, **kwargs):
-        return self.dummy_task.paramify_and_print(*args, **kwargs)
-
-    def paramify(self, data_vector):
-        """convert a data vector on the unit interval into a dict of dicts keyed by parameter names
-        
-        the values will be stored as, e.g. param["name"]["value"]
-        """
-        return self.dummy_task.paramify(data_vector)
-
-    def vectorify(self, params):
-        return self.dummy_task.vectorify(params)
-
-    def from_unit(self, U):
-        """remove the scaling for the parameters that keeps them in [0,1)""" 
-        return self.dummy_task.from_unit(U)
-
+    return ret

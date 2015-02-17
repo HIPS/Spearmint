@@ -245,7 +245,10 @@ class WhitenedPriorSliceSampler(AbstractSampler):
 
         new_params, current_ll = slice_sample(params_array, self.logprob, model, nu, **sampler_options)
 
-        new_latent_values = self._compute_implied_y(model, nu)
+        if model.has_data:
+            new_latent_values = self._compute_implied_y(model, nu)
+        else:
+            new_latent_values = model.latent_values.value
 
         return new_params, new_latent_values, current_ll
 

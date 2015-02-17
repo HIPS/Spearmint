@@ -192,29 +192,35 @@ def init(*args, **kwargs):
     return LocalScheduler(*args, **kwargs)
 
 class LocalScheduler(AbstractScheduler):
-    """scheduler which submits jobs to the local machine via a shell command"""
 
-    def submit(self, job_id, experiment_name, experiment_dir, database_address):
+    def submit(self, job_id, experiment_name, experiment_dir, database_address, output_directory):
         base_path = os.path.dirname(os.path.realpath(spearmint.__file__))
         cmd = ('python %s/launcher.py --database-address %s --experiment-name %s --job-id %s' % 
                (base_path, database_address, experiment_name, job_id))
         
-        output_directory = os.path.join(experiment_dir, 'output')
-        if not os.path.isdir(output_directory):
-            os.mkdir(output_directory)
-
-        # allow the user to specify a subdirectory for the output
-        if "output-subdir" in self.options:
-            output_directory = os.path.join(output_directory, self.options['output-subdir'])
+        if output_directory is not None:
             if not os.path.isdir(output_directory):
                 os.mkdir(output_directory)
 
-        output_filename = os.path.join(output_directory, '%08d.out' % job_id)
-        output_file = open(output_filename, 'w')
+            # allow the user to specify a subdirectory for the output
+            if "output-subdir" in self.options:
+                output_directory = os.path.join(output_directory, self.options['output-subdir'])
+                if not os.path.isdir(output_directory):
+                    os.mkdir(output_directory)
 
-        process = subprocess.Popen(cmd, stdout=output_file, 
-                                        stderr=output_file, 
-                                        shell=True)
+            output_filename = os.path.join(output_directory, '%08d.out' % job_id)
+            output_file = open(output_filename, 'w')
+
+            process = subprocess.Popen(cmd, stdout=output_file, 
+                                            stderr=output_file, 
+                                            shell=True)
+        else:
+            # Throw away the output
+            DEVNULL = open(os.devnull, 'wb')
+            process = subprocess.Popen(cmd, stdout=DEVNULL, 
+                                            stderr=DEVNULL, 
+                                            shell=True)
+
 
         process.poll()
         if process.returncode is not None and process.returncode < 0:
@@ -230,6 +236,7 @@ class LocalScheduler(AbstractScheduler):
     def alive(self, process_id):
         try:
             # Send an alive signal to proc (note this could kill it in windows)
+            os.waitpid(process_id, os.WNOHANG)
             os.kill(process_id, 0)
         except OSError:
             # Job is no longer running.

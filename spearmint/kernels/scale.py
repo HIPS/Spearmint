@@ -189,17 +189,16 @@ from ..utils.param    import Param as Hyperparameter
 
 
 class Scale(AbstractKernel):
-    def __init__(self, kernel, amp2=None, name='ScaleKernel'):
+    def __init__(self, kernel, value=1.0, name='ScaleKernel', prior=None):
         self.name   = name
         self.kernel = kernel
 
-        default_amp2 = Hyperparameter(
-            initial_value = 1.0,
-            prior         = priors.LognormalOnSquare(1.0),
+        self.amp2 = Hyperparameter(
+            initial_value = value,
+            # prior         = priors.LognormalOnSquare(1.0) if prior is None else prior,
+            prior         = priors.NonNegative(priors.Gaussian(mu=1.0, sigma=1.0)) if prior is None else prior,
             name          = 'amp2'
         )
-
-        self.amp2 = amp2 if amp2 is not None else default_amp2
 
     @property
     def hypers(self):

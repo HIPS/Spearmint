@@ -234,32 +234,6 @@ def uni_slice_sample(init_x, logprob, lower, upper, *logprob_args):
             raise Exception("Slice sampler shrank to zero!")
 
 def slice_sample(init_x, logprob, *logprob_args, **slice_sample_args):
-    """generate a new sample from a probability density using slice sampling
-    
-    Parameters
-    ----------
-    init_x : array
-    logprob : callable, `lprob = logprob(x, *logprob_args)`
-        A functions which returns the log probability at a given
-        location
-    *logprob_args :
-        additional arguments are passed to logprob
-        
-    TODO: this function has too many levels and is hard to read.  It would be clearer
-    as a class or just moving the sub-functions to another location
-    
-    Returns
-    -------
-    new_x : float
-        the sampled position
-    new_llh : float 
-        the log likelihood at the new position (I'm not sure about this?)
-        
-    Notes
-    -----
-    http://en.wikipedia.org/wiki/Slice_sampling
-
-    """
     sigma         = slice_sample_args.get('sigma', 1.0)
     step_out      = slice_sample_args.get('step_out', True)
     max_steps_out = slice_sample_args.get('max_steps_out', 1000)

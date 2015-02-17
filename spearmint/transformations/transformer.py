@@ -247,8 +247,19 @@ class Transformer(object):
         assert all([count == 1 for count in counts.values()]), 'Each index may only be used once.'
 
     def forward_pass(self, inputs):
-        assert self.layer_transformations, 'Transformer should contain transformations.'
+        # assert self.layer_transformations, 'Transformer should contain transformations.'
         
+
+
+        # Everything should work if there is no data
+        self._inputs = inputs
+        if inputs.size == 0:
+            return inputs
+
+        # If there are no layers, do nothing
+        if not self.layer_transformations:
+            return inputs
+
         prev_layer = inputs
         for transformations, t_inds, remaining_inds, output_num_dims in zip(self.layer_transformations,
                                                                             self.layer_inds,
@@ -268,7 +279,13 @@ class Transformer(object):
         return layer_out
 
     def backward_pass(self, V):
-        assert self.layer_transformations, 'Transformer should contain transformations.'
+        # assert self.layer_transformations, 'Transformer should contain transformations.'
+        
+        if self._inputs.size == 0:
+            return V
+
+        if not self.layer_transformations:
+            return V
 
         for transformations, t_inds, remaining_inds, output_num_dims in zip(
                 self.layer_transformations,

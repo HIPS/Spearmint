@@ -184,82 +184,102 @@
 
 import sys
 import optparse
+import tempfile
+import datetime
+import subprocess
 import importlib
 import time
+import imp
 import os
+import re
+import pymongo
+import hashlib
+import logging
 
 import numpy as np
 
 try: import simplejson as json
 except ImportError: import json
 
-from collections import OrderedDict
+from collections import defaultdict
 
 from spearmint.utils.database.mongodb import MongoDB
-from spearmint.tasks.task_group       import TaskGroup
+from spearmint.tasks.input_space      import InputSpace
+from spearmint.utils.parsing          import parse_tasks_from_jobs
+from spearmint.utils.parsing          import parse_config_file
+from spearmint.utils.parsing          import parse_resources_from_config
+from spearmint.utils.parsing          import repeat_experiment_name
+from spearmint.utils.parsing          import repeat_output_dir
+from spearmint.resources.resource     import print_resources_status
+from spearmint.tasks.task             import print_tasks_status
 
-from spearmint.resources.resource import parse_resources_from_config
-from spearmint.resources.resource import print_resources_status
 
-from spearmint.utils.parsing import parse_db_address
+logLevel = logging.INFO
+logFormatter = logging.Formatter("%(message)s")
+logging.basicConfig(level=logLevel,
+                    format="%(message)s")
 
-def get_options():
+
+def main():
     parser = optparse.OptionParser(usage="usage: %prog [options] directory")
 
     parser.add_option("--config", dest="config_file",
                       help="Configuration file name.",
                       type="string", default="config.json")
+    parser.add_option("--no-output", action="store_true",
+                      help="Do not create output files.")
+    parser.add_option("--repeat", dest="repeat",
+                      help="Used for repeating the same experiment many times.",
+                      type="int", default="-1")
 
     (commandline_kwargs, args) = parser.parse_args()
 
     # Read in the config file
-    expt_dir  = os.path.realpath(os.path.expanduser(args[0]))
+    expt_dir  = os.path.realpath(args[0])
     if not os.path.isdir(expt_dir):
         raise Exception("Cannot find directory %s" % expt_dir)
-    expt_file = os.path.join(expt_dir, commandline_kwargs.config_file)
 
-    try:
-        with open(expt_file, 'r') as f:
-            options = json.load(f, object_pairs_hook=OrderedDict)
-    except:
-        raise Exception("config.json did not load properly. Perhaps a spurious comma?")
-    options["config"]  = commandline_kwargs.config_file
+    options = parse_config_file(expt_dir, commandline_kwargs.config_file)
+    experiment_name = options["experiment-name"]
 
+    # Special advanced feature for repeating the same experiment many times
+    if commandline_kwargs.repeat >= 0:
+        experiment_name = repeat_experiment_name(experiment_name, commandline_kwargs.repeat)
 
-    # Set sensible defaults for options
-    options['chooser']  = options.get('chooser', 'default_chooser')
-    if 'tasks' not in options:
-        options['tasks'] = {'main' : {'type' : 'OBJECTIVE', 'likelihood' : options.get('likelihood', 'GAUSSIAN')}}
+    if not commandline_kwargs.no_output: # if we want output
+        if commandline_kwargs.repeat >= 0:
+            output_directory = repeat_output_dir(expt_dir, commandline_kwargs.repeat)
+        else:
+            output_directory = os.path.join(expt_dir, 'output')
+        if not os.path.isdir(output_directory):
+            os.mkdir(output_directory)
 
-    # Set DB address
-    db_address = parse_db_address(options)
-    if 'database' not in options:
-        options['database'] = {'name': 'spearmint', 'address': db_address}
+        if commandline_kwargs.repeat < 0:
+            rootLogger = logging.getLogger()
+            fileHandler = logging.FileHandler(os.path.join(output_directory, 'main.log'))
+            fileHandler.setFormatter(logFormatter)
+            fileHandler.setLevel(logLevel)
+            rootLogger.addHandler(fileHandler)
+        # consoleHandler = logging.StreamHandler()
+        # consoleHandler.setFormatter(logFormatter)
+        # consoleHandler.setLevel(logLevel)
+        # rootLogger.addHandler(consoleHandler)
     else:
-        options['database']['address'] = db_address
+        output_directory = None
 
-    if not os.path.exists(expt_dir):
-        sys.stderr.write("Cannot find experiment directory '%s'. "
-                         "Aborting.\n" % (expt_dir))
-        sys.exit(-1)
-
-    return options, expt_dir
-
-def main():
-    options, expt_dir = get_options()
+    input_space = InputSpace(options["variables"])
 
     resources = parse_resources_from_config(options)
 
     # Load up the chooser.
     chooser_module = importlib.import_module('spearmint.choosers.' + options['chooser'])
-    chooser = chooser_module.init(options)
-    experiment_name     = options.get("experiment-name", 'unnamed-experiment')
+    chooser = chooser_module.init(input_space, options)
 
     # Connect to the database
     db_address = options['database']['address']
-    sys.stderr.write('Using database at %s.\n' % db_address)        
     db         = MongoDB(database_address=db_address)
-    
+
+    waiting_for_results = False  # for printing purposes only
     while True:
 
         for resource_name, resource in resources.iteritems():
@@ -270,27 +290,102 @@ def main():
             # If the resource is currently accepting more jobs
             # TODO: here cost will eventually also be considered: even if the 
             #       resource is not full, we might wait because of cost incurred
-            # Note: I chose to fill up one resource and them move on to the next
-            # You could also do it the other way, by changing "while" to "if" here
+            # Note: I could chose to fill up one resource and them move on to the next ("if")
+            # You could also do it the other way, by changing "if" to "while" here
 
-            while resource.acceptingJobs(jobs):
+            # Remove any broken jobs from pending 
+            # note: make sure to do this before the acceptingJobs() condition is checked
+            remove_broken_jobs(db, jobs, experiment_name, resources)
+
+            if resource.acceptingJobs(jobs):
+
+                if waiting_for_results:
+                    logging.info('\n')
+                waiting_for_results = False
+
+                optim_start_time = time.time()
 
                 # Load jobs from DB 
                 # (move out of one or both loops?) would need to pass into load_tasks
                 jobs = load_jobs(db, experiment_name)
-                
-                # Remove any broken jobs from pending.
-                remove_broken_jobs(db, jobs, experiment_name, resources)
+
+                # Print out a list of broken jobs
+                print_broken_jobs(jobs)
 
                 # Get a suggestion for the next job
-                suggested_job = get_suggestion(chooser, resource.tasks, db, expt_dir, options, resource_name)
-    
+                tasks = parse_tasks_from_jobs(jobs, experiment_name, options, input_space)
+
+                # Special case when coupled and there is a NaN task-- what to do with NaN task when decoupled??
+                if 'NaN' in tasks and 'NaN' not in resource.tasks:
+                    resource.tasks.append('NaN')
+
+                # Load the model hypers from the database.
+                hypers = db.load(experiment_name, 'hypers')
+
+                # "Fit" the chooser - give the chooser data and let it fit the model(s).
+                # NOTE: even if we are only suggesting for 1 task, we need to fit all of them
+                # because the acquisition function for one task depends on all the tasks
+                hypers = chooser.fit(tasks, hypers)
+                
+                if hypers:
+                    logging.debug('GP covariance hyperparameters:')
+                print_hypers(hypers)
+
+                # Save the hyperparameters to the database.
+                if hypers:
+                    db.save(hypers, experiment_name, 'hypers')
+
+                # Compute the best value so far, a.k.a. the "recommendation"
+                recommendation = chooser.best()
+
+                # Save the recommendation in the DB
+                numComplete_by_task = {task_name : task.numComplete(jobs) for task_name, task in tasks.iteritems()}
+                db.save({'num_complete' : resource.numComplete(jobs),
+                     'num_complete_tasks' : numComplete_by_task,
+                     'params'   : input_space.paramify(recommendation['model_model_input']), 
+                     'objective': recommendation['model_model_value'],
+                     'params_o' : None if recommendation['obser_obser_input'] is None else input_space.paramify(recommendation['obser_obser_input']),
+                     'obj_o'    : recommendation['obser_obser_value'],
+                     'params_om': None if recommendation['obser_model_input'] is None else input_space.paramify(recommendation['obser_model_input']),
+                     'obj_om'   : recommendation['obser_model_value']}, 
+                experiment_name, 'recommendations', {'id' : len(jobs)})
+
+                # Get the decoupling groups
+                task_couplings = {task_name : tasks[task_name].options["group"] for task_name in resource.tasks}
+
+                logging.info('\nGetting suggestion for %s...\n' % (', '.join(task_couplings.keys())))
+
+                # Get the next suggested experiment from the chooser.
+                suggested_input, suggested_tasks = chooser.suggest(task_couplings, optim_start_time)
+                suggested_task = suggested_tasks[0] # hack, deal with later
+
+                suggested_job = {
+                    'id'          : len(jobs) + 1,
+                    'params'      : input_space.paramify(suggested_input),
+                    'expt_dir'    : options['main_file_path'],
+                    'tasks'       : suggested_tasks,
+                    'resource'    : resource_name,
+                    'main-file'   : options['tasks'][suggested_task]['main_file'],
+                    'language'    : options['tasks'][suggested_task]['language'],
+                    'status'      : 'new',
+                    'submit time' : time.time(),
+                    'start time'  : None,
+                    'end time'    : None
+                }
+
+                save_job(suggested_job, db, experiment_name)
+
                 # Submit the job to the appropriate resource
-                process_id = resource.attemptDispatch(experiment_name, suggested_job, db_address, expt_dir)
+                process_id = resource.attemptDispatch(experiment_name, suggested_job, db_address, 
+                                                      expt_dir, output_directory)
+
+                # Print the current time
+                logging.info('Current time: %s' % datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
                 # Set the status of the job appropriately (successfully submitted or not)
                 if process_id is None:
                     suggested_job['status'] = 'broken'
+                    logging.info('Job %s failed -- check output file for details.' % job['id'])
                     save_job(suggested_job, db, experiment_name)
                 else:
                     suggested_job['status'] = 'pending'
@@ -303,119 +398,106 @@ def main():
                 # resource.printStatus(jobs)
                 print_resources_status(resources.values(), jobs)
 
-        # If no resources are accepting jobs, sleep
-        # (they might be accepting if suggest takes a while and so some jobs already finished by the time this point is reached)
-        if tired(db, experiment_name, resources):
-            time.sleep(options.get('polling-time', 5))
+                if len(set(task_couplings.values())) > 1: # if decoupled
+                    print_tasks_status(tasks.values(), jobs)
 
-def tired(db, experiment_name, resources):
-    """
-    return True if no resources are accepting jobs
-    """
+                # For debug - print pending jobs
+                print_pending_jobs(jobs)
+
+        
+        # Terminate the optimization if all resources are finished (run max number of jobs)
+        # or ANY task is finished (just my weird convention)
+        if reduce(lambda x,y: x and y, map(lambda x: x.maxCompleteReached(jobs), resources.values()), True) or \
+           reduce(lambda x,y: x or y,  map(lambda x: x.maxCompleteReached(jobs), tasks.values()),     False):
+            # Do all this extra work just to save the final recommendation -- would be ok to delete everything
+            # in here and just "return"
+            sys.stdout.write('\n')
+            jobs = load_jobs(db, experiment_name)
+            tasks = parse_tasks_from_jobs(jobs, experiment_name, options, input_space)
+            hypers = db.load(experiment_name, 'hypers')
+            hypers = chooser.fit(tasks, hypers)
+            if hypers:
+                db.save(hypers, experiment_name, 'hypers')
+            # logging.info('\n**All resources have run the maximum number of jobs.**\nFinal recommendation:')
+            recommendation = chooser.best()
+
+            # numComplete_per_task
+            numComplete_by_task = {task_name : task.numComplete(jobs) for task_name, task in tasks.iteritems()}
+            db.save({'num_complete'       : resource.numComplete(jobs),
+                     'num_complete_tasks' : numComplete_by_task,
+                     'params'   : input_space.paramify(recommendation['model_model_input']), 
+                     'objective': recommendation['model_model_value'],
+                     'params_o' : None if recommendation['obser_obser_input'] is None else input_space.paramify(recommendation['obser_obser_input']),
+                     'obj_o'    : recommendation['obser_obser_value'],
+                     'params_om': None if recommendation['obser_model_input'] is None else input_space.paramify(recommendation['obser_model_input']),
+                     'obj_om'   : recommendation['obser_model_value']}, 
+                experiment_name, 'recommendations', {'id'       : len(jobs)})
+            logging.info('Maximum number of jobs completed. Have a nice day.')
+            return
+
+        # If no resources are accepting jobs, sleep
+        if no_free_resources(db, experiment_name, resources):
+            # Don't use logging here because it's too much effort to use logging without a newline at the end
+            sys.stdout.write('Waiting for results...' if not waiting_for_results else '.')
+            sys.stdout.flush()
+            # sys.stderr.flush()
+            waiting_for_results = True
+            time.sleep(options['polling_time'])
+        else:
+            sys.stdout.write('\n')
+
+
+# Is it the case that no resources are accepting jobs?
+def no_free_resources(db, experiment_name, resources):
     jobs = load_jobs(db, experiment_name)
     for resource_name, resource in resources.iteritems():
         if resource.acceptingJobs(jobs):
             return False
     return True
 
+# Look thorugh jobs and for those that are pending but not alive, set
+# their status to 'broken'
+# there are 3 places a job can be set to broken 
+#   1. in launcher.py if the thing throws an error
+#   2. above in the main loop, if it fails immediately upon spawning
+#   3. here, if it still thinks it is pending but it died
+#
 def remove_broken_jobs(db, jobs, experiment_name, resources):
-    """
-    Look through jobs and for those that are pending but not alive, set
-    their status to 'broken'
-    """
-    if jobs:
-        for job in jobs:
-            if job['status'] == 'pending':
-                if not resources[job['resource']].isJobAlive(job):
-                    sys.stderr.write('Broken job %s detected.\n' % job['id'])
-                    job['status'] = 'broken'
-                    save_job(job, db, experiment_name)
+    for job in jobs:
+        if job['status'] == 'pending':
+            if not resources[job['resource']].isJobAlive(job):
+                job['status'] = 'broken'
+                save_job(job, db, experiment_name)
 
-# TODO: support decoupling i.e. task_names containing more than one task,
-#       and the chooser must choose between them in addition to choosing X
-def get_suggestion(chooser, task_names, db, expt_dir, options, resource_name):
+def print_broken_jobs(jobs):
+    broken_jobs = defaultdict(list) 
+    for job in jobs:
+        if job['status'] == 'broken':
+            broken_jobs[', '.join(job['tasks'])].append(str(job['id']))
 
-    if len(task_names) == 0:
-        raise Exception("Error: trying to obtain suggestion for 0 tasks ")
+    for task_names_broken, broken_id_list in broken_jobs.iteritems():
+        logging.info('** Failed jobs(s) for %s: %s\n' % (task_names_broken, ', '.join(broken_id_list)))
 
-    experiment_name = options['experiment-name']
+def print_pending_jobs(jobs):
+    pending_jobs = defaultdict(list)
+    for job in jobs:
+        if job['status'] == 'pending':
+            pending_jobs[', '.join(job['tasks'])].append(str(job['id']))
 
-    # We are only interested in the tasks in task_names
-    task_options = { task: options["tasks"][task] for task in task_names }
-    # For now we aren't doing any multi-task, so the below is simpler
-    # task_options = options["tasks"]
-
-    # Load the tasks from the database -- only those in task_names!
-    task_group = load_task_group(db, options, task_names)
-
-    # Load the model hypers from the database.
-    hypers = load_hypers(db, experiment_name)
-
-    # "Fit" the chooser - give the chooser data and let it fit the model.
-    hypers = chooser.fit(task_group, hypers, task_options)
-
-    # Save the hyperparameters to the database.
-    save_hypers(hypers, db, experiment_name)
-
-    # Ask the chooser to actually pick one.
-    suggested_input = chooser.suggest()
-
-    # TODO: implelent this
-    suggested_task = task_names[0]  
-
-    # Parse out the name of the main file (TODO: move this elsewhere)
-    if "main-file" in task_options[suggested_task]:
-        main_file = task_options[suggested_task]["main-file"]
-    elif "main-file" in options:
-        main_file = options['main-file']
-    else:
-        raise Exception("main-file not specified for task %s" % suggested_task)
-
-    if "language" in task_options[suggested_task]:
-        language = task_options[suggested_task]["language"]
-    elif "language" in options:
-        language = options['language']
-    else:
-        raise Exception("language not specified for task %s" % suggested_task)
+    for task_names_pending, pending_id_list in pending_jobs.iteritems():
+        logging.info('ID(s) of pending job(s) for %s: %s' % (task_names_pending, ', '.join(pending_id_list)))
 
 
-    jobs = load_jobs(db, experiment_name)
-
-    job_id = len(jobs) + 1
-
-    job = {
-        'id'          : job_id,
-        'params'      : task_group.paramify(suggested_input),
-        'expt_dir'    : expt_dir,
-        'tasks'       : task_names,
-        'resource'    : resource_name,
-        'main-file'   : main_file,
-        'language'    : language,
-        'status'      : 'new',
-        'submit time' : time.time(),
-        'start time'  : None,
-        'end time'    : None
-    }
-
-    save_job(job, db, experiment_name)
-
-    return job
-
-def save_hypers(hypers, db, experiment_name):
-    if hypers:
-        db.save(hypers, experiment_name, 'hypers')
-
-def load_hypers(db, experiment_name):
-    return db.load(experiment_name, 'hypers')
+def print_hypers(hypers):
+    for task_name, stored_dict in hypers.iteritems():
+        logging.debug(task_name)
+        if 'latent values' in stored_dict:
+            logging.debug('   Latent values: %s' % ', '.join(map(lambda x: '%.04f'%x, stored_dict['latent values'].values())))
+        for hyper_name, hyper_value in stored_dict['hypers'].iteritems():
+            logging.debug('   %s: %s' % (hyper_name, hyper_value))
+    logging.debug('')
 
 def load_jobs(db, experiment_name):
-    """load the jobs from the database
-    
-    Returns
-    -------
-    jobs : list
-        a list of jobs or an empty list
-    """
     jobs = db.load(experiment_name, 'jobs')
 
     if jobs is None:
@@ -426,69 +508,7 @@ def load_jobs(db, experiment_name):
     return jobs
 
 def save_job(job, db, experiment_name):
-    """save a job to the database"""
     db.save(job, experiment_name, 'jobs', {'id' : job['id']})
-
-def load_task_group(db, options, task_names=None):
-    if task_names is None:
-        task_names = options['tasks'].keys()
-    task_options = { task: options["tasks"][task] for task in task_names }
-
-    jobs = load_jobs(db, options['experiment-name'])
-
-    task_group = TaskGroup(task_options, options['variables'])
-
-    if jobs:
-        task_group.inputs  = np.array([task_group.vectorify(job['params'])
-                for job in jobs if job['status'] == 'complete'])
-
-        task_group.pending = np.array([task_group.vectorify(job['params'])
-                for job in jobs if job['status'] == 'pending'])
-
-        task_group.values  = {task : np.array([job['values'][task]
-                for job in jobs if job['status'] == 'complete'])
-                    for task in task_names}
-
-        task_group.add_nan_task_if_nans()
-
-        # TODO: record costs
-
-    return task_group
-
-
-# BROKEN
-def print_diagnostics(chooser):
-    sys.stderr.write("Optimizing over %d dimensions\n" % (expt_grid.vmap.cardinality))
-    best_val   = None
-    best_job   = None
-    best_input = None
-    if task.has_data():
-        best_input, best_val = chooser.get_best()
-        best_job = db.load(experiment_name, 'jobs', {'input' : best_input})
-
-        if best_job:
-            best_job = best_job[0]
-        else:
-            best_job 
-            raise Warning('Job ID of best input/value pair not recorded.')
-
-    # Track the time series of optimization. This should eventually go into a diagnostics module.
-    trace_fh = open(os.path.join(expt_dir, 'trace.csv'), 'a')
-    trace_fh.write("%d,%f,%d,%d,%d,%d\n"
-                   % (time.time(), best_val, best_job,
-                      tasks.pending.shape[0], tasks.invalid.shape[0], tasks.data.shape[0]))
-    trace_fh.close()
-
-    # Print out the best job results
-    best_job_fh = open(os.path.join(expt_dir, 'best_job_and_result.txt'), 'w')
-    best_job_fh.write("Best result: %f\nJob-id: %d\nParameters: \n" % 
-                      (best_val, best_job))
-
-    if best_input:
-        for name, params in task.get_params(best_input):
-            best_job_fh.write('%s: %s\n' % (name, params))
-
-    best_job_fh.close()
 
 if __name__ == '__main__':
     main()

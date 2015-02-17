@@ -190,6 +190,8 @@ import subprocess
 import numpy as np
 
 from spearmint.utils.database.mongodb import MongoDB
+from spearmint.utils.parsing import DEFAULT_TASK_NAME, DEFAULT_CONSTRAINT_NAME
+from spearmint.tasks.input_space import paramify_no_types
 
 def main():
     parser = optparse.OptionParser(usage="usage: %prog [options]")
@@ -241,13 +243,9 @@ def launch(db_address, experiment_name, job_id):
 
         elif job['language'].lower() == 'python':
             result = python_launcher(job)
-
+            # sys.stderr.write('RESULT EQUALS %s' % result)
         elif job['language'].lower() == 'shell':
             result = shell_launcher(job)
-
-        elif job['language'].lower() == 'mcr':
-            result = mcr_launcher(job)
-
         else:
             raise Exception("That language has not been implemented.")
 
@@ -255,19 +253,31 @@ def launch(db_address, experiment_name, job_id):
             # Returning just NaN means NaN on all tasks
             if np.isnan(result):
                 # Apparently this dict generator throws an error for some people??
-                # result = {task_name: np.nan for task_name in job['tasks']}
+                result = {task_name: np.nan for task_name in job['tasks']}
                 # So we use the much uglier version below... ????
-                result = dict(zip(job['tasks'], [np.nan]*len(job['tasks'])))
-            elif len(job['tasks']) == 1: # Only one named job
+                # result = dict(zip(job['tasks'], [np.nan]*len(job['tasks'])))
+            elif len(job['tasks']) == 1: # Only one named job and result is not a dict, stick it in dict
                 result = {job['tasks'][0] : result}
             else:
-                result = {'main' : result}
-        
+                result = {DEFAULT_TASK_NAME : result}
+        else:
+            if "objective" in result and "constraints" in result:
+                result_new = dict()
+                result_new[DEFAULT_TASK_NAME] = result["objective"]
+                for i in xrange(len(result["constraints"])):
+                    result_new['%s%d' % (DEFAULT_CONSTRAINT_NAME, i)] = result["constraints"][i]
+                result = result_new
+
+        # actually it's ok if the result dict contains extra stuff. so it would be fine just to
+        # check that all((t in result for t in job['tasks']))
         if set(result.keys()) != set(job['tasks']):
-            raise Exception("Result task names %s did not match job task names %s." % (result.keys(), job['tasks']))
+            if set(result.keys()).union(['NaN']) != set(job['tasks']):
+                raise Exception("Result task names %s did not match job task names %s." % (result.keys(), job['tasks']))
 
         success = True
     except:
+        sys.stderr.flush()
+        sys.stdout.flush()
         import traceback
         traceback.print_exc()
         sys.stderr.write("Problem executing the function\n")
@@ -303,19 +313,8 @@ def python_launcher(job):
     os.chdir(job['expt_dir'])
     sys.stderr.write("Changed into dir %s\n" % (os.getcwd()))
 
-    # Convert the JSON object into useful parameters.
-    params = {}
-    for name, param in job['params'].iteritems():
-        vals = param['values']
-
-        if param['type'].lower() == 'float':
-            params[name] = np.array(vals)
-        elif param['type'].lower() == 'int':
-            params[name] = np.array(vals, dtype=int)
-        elif param['type'].lower() == 'enum':
-            params[name] = vals
-        else:
-            raise Exception("Unknown parameter type.")
+    # Strip off the data types and just get the raw values
+    params = paramify_no_types(job['params'])
 
     # Load up this module and run
     main_file = job['main-file']
@@ -329,13 +328,11 @@ def python_launcher(job):
     # Change back out.
     os.chdir('..')
 
-    # TODO: add dict capability
-
     sys.stderr.write("Got result %s\n" % (result))
 
     return result
 
-# BROKEN
+# BROKEN ?? might not be?
 def matlab_launcher(job):
     # Run it as a Matlab function.
 
@@ -395,21 +392,6 @@ def shell_launcher(job):
 
     return result
 
-# BROKEN
-def mcr_launcher(job):
-    # Change into the directory.
-    os.chdir(job['expt_dir'])
-
-    if os.environ.has_key('MATLAB'):
-        mcr_loc = os.environ['MATLAB']
-    else:
-        raise Exception("Please set the MATLAB environment variable")
-
-    cmd = './run_%s.sh %s %s' % (job['function-name'], mcr_loc, job_file)
-    sys.stderr.write("Executing command '%s'\n" % (cmd))
-    subprocess.check_call(cmd, shell=True)
-
-    return result
 
 if __name__ == '__main__':
     main()

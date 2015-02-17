@@ -182,81 +182,76 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
+import numpy          as np
+import numpy.random   as npr
+import scipy.linalg   as spla
+import numpy.linalg   as npla
 
-import numpy as np
+def constraint_confidence(model, x, compute_grad=False):
+    return model.pi(x, compute_grad=compute_grad)
 
-from .base_task import BaseTask
-
-
-class SimpleTask(BaseTask):
-    """
-    A task is a dataset that contains utilities to map
-    from the variables specified in a config file to a matrix
-    representation that can be used in a chooser/model.
-    """
+def total_constraint_confidence(constraint_models, x, compute_grad=False):
+    # Compute p(valid) for ALL constraints
+    p_valid, p_grad = list(), list()
+    for model in constraint_models:
+        if compute_grad:
+            pv, pvg = constraint_confidence(model, x, compute_grad=True)
+            p_valid.append(pv)
+            p_grad.append(pvg)
+        else:
+            p_valid.append(constraint_confidence(model, x, compute_grad=False))
     
-    def __init__(self, variables_config, inputs=None, pending=None, values=None, costs=None, options=None, likelihood='gaussian'):
-        self.variables_meta, self.num_dims, self.cardinality = self.variables_config_to_meta(variables_config)
-        self.likelihood = likelihood
-        self.options = options if options else {}
-        self.options['likelihood'] = likelihood
+    p_valid_prod = reduce(np.multiply, p_valid, np.ones(x.shape[0]))
 
-        #TODO: Validate the data
-        self._inputs  = inputs if inputs is not None else np.array([])
-        self._pending = pending if pending is not None else np.array([])
-        self._values  = values if values is not None else np.array([])
-        self._costs   = costs if costs is not None else np.array([])
+    if not compute_grad:
+        return p_valid_prod
+    else:
+        # To compute the gradient, need to do the chain rule for the product of N factors
+        p_grad_prod = np.zeros(p_grad[0].shape)
+        for i in xrange(len(constraint_models)):
+            pg = p_grad[i]
+            for j in xrange(len(constraint_models)):
+                if j == i:
+                    continue
+                pg *= p_valid[j]
+            p_grad_prod += pg
+        # multiply that gradient by all other pv's (this might be numerically disasterous if pv=0...)
+        return p_valid_prod, p_grad_prod
 
-    @property
-    def inputs(self):
-        return self._inputs
+# The confidence that conststraint c is satisfied
+def constraint_confidence_over_hypers(model, x, compute_grad=False):
+    return model.function_over_hypers(constraint_confidence, model, x, compute_grad=compute_grad)
 
-    @inputs.setter
-    def inputs(self, inputs):
-        self._inputs = inputs
-
-    @property
-    def pending(self):
-        return self._pending
-
-    @pending.setter
-    def pending(self, pending):
-        self._pending = pending
-
-    @property
-    def values(self):
-        return self._values
-
-    @values.setter
-    def values(self, values):
-        self._values = values
-
-    @property
-    def valid_inputs(self):
-        return self._inputs[~np.isnan(self._values)]
-
-    @property
-    def valid_values(self):
-        return self._values[~np.isnan(self._values)]
-
-    @property
-    def counts(self):
-        return np.isnan(self.values)
-
-    @property
-    def normalized_data_dict(self):
-        dd = {}
-        dd['inputs'] = self.to_unit(self.valid_inputs)
-
-        if self.likelihood == 'gaussian':
-            dd['values'] = self.standardize_mean(self.valid_values)
-            dd['values'] = self.standardize_variance(dd['values'])    
+# Compute the product of confidences over all constraints
+# because each constraint is independent and we are just multiplying functions of them
+# we can average each one and then multiply at the end (I don't think this is actually true?)
+# otherwise could just do total_constraint_confidence averaged over hypers
+def total_constraint_confidence_over_hypers(constraint_models, x, compute_grad=False):
+    # Compute p(valid) for ALL constraints
+    p_valid, p_grad = list(), list()
+    for model in constraint_models:
+        if compute_grad:
+            pv, pvg = constraint_confidence_over_hypers(model, x, compute_grad=True)
+            p_valid.append(pv)
+            p_grad.append(pvg)
         else:
-            dd['counts'] = self.valid_values
+            p_valid.append(constraint_confidence_over_hypers(model, x, compute_grad=False))
+    
+    p_valid_prod = reduce(np.multiply, p_valid, np.ones(x.shape[0]))
 
-        if self.pending.shape[0] > 0:
-            dd['pending'] = self.to_unit(self.pending)
-        else:
-            dd['pending'] = None
+    if not compute_grad:
+        return p_valid_prod
+    else:
+        # To compute the gradient, need to do the chain rule for the product of N factors
+        p_grad_prod = np.zeros(p_grad[0].shape)
+        for i in xrange(len(constraint_models)):
+            pg = p_grad[i]
+            for j in xrange(len(constraint_models)):
+                if j == i:
+                    continue
+                pg *= p_valid[j]
+            p_grad_prod += pg
+        # multiply that gradient by all other pv's (this might be numerically disasterous if pv=0...)
+        return p_valid_prod, p_grad_prod
 
-        return dd
+

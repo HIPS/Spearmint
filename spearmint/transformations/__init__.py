@@ -5,5 +5,6 @@ from normalization import Normalization
 from linear        import Linear
 from transformer   import Transformer
 from norm_lin      import NormLin
+from rescaling     import Rescaling
 
-__all__ = ["BetaWarp", "IgnoreDims", "KumarWarp", "Normalization", "Linear", "Transformer", "NormLin"]
+__all__ = ["BetaWarp", "IgnoreDims", "KumarWarp", "Normalization", "Linear", "Transformer", "NormLin", "Rescaling"]

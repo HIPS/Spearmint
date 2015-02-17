@@ -183,17 +183,18 @@
 # its Institution.
 
 
-import sys
+import logging
 import numpy as np
 from collections import OrderedDict
 
 
-class BaseTask(object):
+class InputSpace(object):
     """
-    Contains useful methods for a task to inherit.
+    An input space as specified in the Spearmint config file.
+    Handles things like squashing the inputs into the unit hypercube.
     """
 
-    def variables_config_to_meta(self, variables_config):
+    def __init__(self, variables_config):
         """
         Converts a dict of variable meta-information from a config-file format into
         a format that can be more easily used by bayesopt routines.
@@ -212,12 +213,38 @@ class BaseTask(object):
             vdict = {'type'    : variable['type'].lower(),
                      'indices' : []} # indices stores a mapping from these variable(s) to their matrix column(s)
 
-            if vdict['type'] == 'int':
-                vdict['min'] = int(variable['min'])
-                vdict['max'] = int(variable['max'])
-            elif vdict['type'] == 'float':
-                vdict['min'] = float(variable['min'])
-                vdict['max'] = float(variable['max'])
+            if vdict['type'] == 'int' or vdict['type'] == 'float':
+                conv_func = int if vdict['type'] == 'int' else float
+                
+                # here is some hackery for prototyping the unknown "?" bounds
+                # basically, if min and max are ? then we start with 0 and 1
+                # if only 1 is "?" we start with a region of size 1 for that dimensions
+                # we use conv_func so we don't need repeated code for int and float
+                if variable['min'] == "?":
+                    if variable['max'] == "?":
+                        vdict['min'] = 0
+                        vdict['max'] = 1
+                        vdict['min expandable'] = True
+                        vdict['max expandable'] = True
+                        print 'Expandable min and max bounds detected for %s' % name
+                    else:
+                        vdict['max'] = conv_func(variable['max'])
+                        vdict['min'] = vdict['max'] - 1
+                        vdict['min expandable'] = True
+                        vdict['max expandable'] = False
+                        print 'Expandable min bound detected for %s' % name
+                else:
+                    if variable['max'] == "?":
+                        vdict['min'] = conv_func(variable['min'])
+                        vdict['max'] = vdict['min'] + 1
+                        vdict['min expandable'] = False
+                        vdict['max expandable'] = True
+                        print 'Expandable max bound detected for %s' % name
+                    else:
+                        vdict['min'] = conv_func(variable['min'])
+                        vdict['max'] = conv_func(variable['max'])
+                        vdict['min expandable'] = False
+                        vdict['max expandable'] = False
             elif vdict['type'] == 'enum':
                 vdict['options'] = list(variable['options'])
             else:
@@ -238,37 +265,40 @@ class BaseTask(object):
 
             variables_meta[name] = vdict
 
-        return variables_meta, num_dims, cardinality
+        self.variables_meta = variables_meta
+        self.num_dims = num_dims
+        self.cardinality = cardinality
 
-    def paramify_and_print(self, data_vector, left_indent=0, indent_top_row=False):
+    def paramify_and_print(self, data_vector, left_indent=0, indent_top_row=True):
         params = self.paramify(data_vector)
         indentation = ' '*left_indent
         
+        top_row = 'NAME          TYPE       VALUE'
         if indent_top_row:
-            sys.stderr.write(indentation)
-        sys.stderr.write('NAME          TYPE       VALUE\n')
-        sys.stderr.write(indentation)
-        sys.stderr.write('----          ----       -----\n')
+            top_row = indentation + top_row
+        logging.info(top_row)
+        logging.info(indentation + '----          ----       -----')
 
         for param_name, param in params.iteritems():
 
             if param['type'] == 'float':
-                format_str = '%s%-12.12s  %-9.9s  %-12f\n'
+                format_str = '%s%-12.12s  %-9.9s  %-12f'
             else:
-                format_str = '%s%-12.12s  %-9.9s  %-12d\n'
+                format_str = '%s%-12.12s  %-9.9s  %-12d'
 
             for i in xrange(len(param['values'])):
                 if i == 0:
-                    sys.stderr.write(format_str % (indentation, param_name, param['type'], param['values'][i]))
+                    logging.info(format_str % (indentation, param_name, param['type'], param['values'][i]))
                 else:
-                    sys.stderr.write(format_str % (indentation, '',                        param['values'][i]))
+                    logging.info(format_str % (indentation, '', '',                    param['values'][i]))
+
 
     # Converts a vector in input space to the corresponding dict of params
     def paramify(self, data_vector):
         if data_vector.ndim != 1:
             raise Exception('Input to paramify must be a 1-D array.')
 
-        params = {}
+        params = OrderedDict()
         for name, vdict in self.variables_meta.iteritems():
             indices = vdict['indices']
             params[name] = {}
@@ -302,10 +332,25 @@ class BaseTask(object):
 
         return v
 
+    # x is a distance in the original space (a float)
+    # we just want to rescale it to be a distance in the new space. 
+    # so we only care about changing the size
+    # assume it's a float
+    def rescale_to_unit(self, x):
+        V = x.copy()
+        if V.ndim == 1:
+            V = V[None]
+
+        for name, variable in self.variables_meta.iteritems():
+            indices = variable['indices']
+            V[:,indices] /= (variable['max']-variable['min'])
+        
+        return np.squeeze(V)
+
     # Consider memoization here if this method becomes a bottleneck
     def to_unit(self, V):
         if V.shape[0] == 0:
-            return np.array([])
+            return V
 
         if V.ndim == 1:
             V = V[None,:]
@@ -335,7 +380,7 @@ class BaseTask(object):
         
     def from_unit(self, U):
         if U.shape[0] == 0:
-            return np.array([])
+            return U
 
         if U.ndim == 1:
             U = U[None,:]
@@ -412,3 +457,20 @@ class BaseTask(object):
     def unit_to_enum(self, u, options):
         return options[u.argmax()]
 
+
+# Converts a vector in input space to the corresponding dict of params
+def paramify_no_types(input_params):
+    params = dict()
+    for name, param in input_params.iteritems():
+        vals = param['values']
+
+        if param['type'].lower() == 'float':
+            params[name] = np.array(vals)
+        elif param['type'].lower() == 'int':
+            params[name] = np.array(vals, dtype=int)
+        elif param['type'].lower() == 'enum':
+            params[name] = vals
+        else:
+            raise Exception("Unknown parameter type.")
+
+    return params

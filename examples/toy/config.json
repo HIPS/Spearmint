@@ -1,0 +1,27 @@
+{
+    "language"          : "PYTHON",
+    "main_file"         : "toy",
+    "experiment-name"   : "PESC-toy-problem",
+    "acquisition"       : "PES",
+    "max_finished_jobs" : 40,
+    "variables" : {
+        "x" : {
+            "type" : "FLOAT",
+            "size" : 1,
+            "min"  : 0,
+            "max"  : 1
+        },
+        "y" : {
+            "type" : "FLOAT",
+            "size" : 1,
+            "min"  : 0,
+            "max"  : 1
+        }
+    },
+    "tasks" : {
+        "f"  : { "type" : "objective"  },
+        "c1" : { "type" : "constraint" },
+        "c2" : { "type" : "constraint" }
+    }
+}
+

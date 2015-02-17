@@ -195,17 +195,15 @@ SQRT_5 = np.sqrt(5.0)
 
 
 class Matern52(AbstractKernel):
-    def __init__(self, num_dims, length_scale=None, name='Matern52'):
+    def __init__(self, num_dims, value=None, name='Matern52', prior=None):
         self.name     = name
         self.num_dims = num_dims
 
-        default_ls = Hyperparameter(
-            initial_value = np.ones(self.num_dims),
-            prior         = priors.Tophat(0,10),
+        self.ls = Hyperparameter(
+            initial_value = np.ones(self.num_dims)   if value is None else value,
+            prior         = priors.Tophat(0.0, 10.0) if prior is None else prior,
             name          = 'ls'
         )
-
-        self.ls = length_scale if length_scale is not None else default_ls
 
         assert self.ls.value.shape[0] == self.num_dims
 
@@ -229,6 +227,9 @@ class Matern52(AbstractKernel):
     def cross_cov_grad_data(self, inputs_1, inputs_2):
         # NOTE: This is the gradient wrt the inputs of inputs_2
         # The gradient wrt the inputs of inputs_1 is -1 times this
+        # This is sloppily coded -- the gradient that comes from kernel_utils is w.r.t. inputs_1
+        # but a minus sign is dropped to make it w.r.t. inputs_2
+        # oh well...
         r2      = np.abs(kernel_utils.dist2(self.ls.value, inputs_1, inputs_2))
         r       = np.sqrt(r2)
         grad_r2 = (5.0/6.0)*np.exp(-SQRT_5*r)*(1 + SQRT_5*r)

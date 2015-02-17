@@ -1,9 +1,12 @@
-Spearmint
+spearmint: Bayesian optimization codebase
 =========================================
 
 Spearmint is a software package to perform Bayesian optimization. The Software is designed to automatically run experiments (thus the code name spearmint) in a manner that iteratively adjusts a number of parameters so as to minimize some objective in as few runs as possible.
 
-**IMPORTANT:** Spearmint is under an **Academic and Non-Commercial Research Use License**.  Before using spearmint please be aware of the [license](LICENSE.md).  If you do not qualify to use spearmint you can ask to obtain a license as detailed in the [license](LICENSE.md) or you can use the older open source code version (which is somewhat outdated) at https://github.com/JasperSnoek/spearmint.  
+## IMPORTANT: Spearmint is under an **Academic and Non-Commercial Research Use License**.  Before using spearmint please be aware of the [license](LICENSE.md).  If you do not qualify to use spearmint you can ask to obtain a license as detailed in the [license](LICENSE.md) or you can use the older open source code version (which is somewhat outdated) at https://github.com/JasperSnoek/spearmint.  
+
+## IMPORTANT: You are off the main branch!
+This is the PESC branch. This branch contains the Predictive Entropy Search with Constraints (PESC) acquisition function, described in a paper soon to be posted on arXiv. Note: using PESC <i>without</i> constraints results in a method that is similar (but not exactly equivalent) to Predictive Entropy Search (http://arxiv.org/abs/1406.2541). This branch also comes with a basic 2D plotting routine. 
 
 ####Relevant Publications
 
@@ -28,24 +31,43 @@ Spearmint implements a combination of the algorithms detailed in the following p
     Michael Gelbart, Jasper Snoek and Ryan Prescott Adams
     Uncertainty in Artificial Intelligence, 2014
 
-####Setting up Spearmint
+The PESC method used in this branch of Spearmint will appear on arXiv shortly; please check back soon.
 
-**STEP 1: Installation**  
+### STEP 1: Installation
+1. Download/clone the spearmint code
+2. Install the spearmint package using pip: "pip install -e \</path/to/spearmint/root\>" (the -e means changes will be reflected automatically)
+3. Download and install MongoDB: https://www.mongodb.org/
+4. Install the pymongo package using e.g., pip or anaconda
+5. (Optional) Download and install NLopt: http://ab-initio.mit.edu/wiki/index.php/NLopt (see below for instructions)
 
-1. Install [python](https://www.python.org/), [numpy](http://www.numpy.org/), [scipy](http://www.numpy.org/). For academic users, the [anaconda](http://continuum.io/downloads) distribution is great. Use numpy 1.8 or higher. We use python 2.7.
-2. Download/clone the spearmint code  
-3. Install the spearmint package using pip: `pip install -e \</path/to/spearmint/root\>` (the -e means changes will be reflected automatically)  
-4. Download and install MongoDB: https://www.mongodb.org/   
-5. Install the pymongo package using e.g., pip `pip install pymongo` or anaconda `conda install pymongo`  
+### STEP 2: Setting up your experiment
+1. Create a callable objective function. See ../examples/toy/toy.py as an example.
+2. Create a config file. See ../examples/toy/config.json as an example. Here you will see that we specify the PESC acquisition function rather than the default, which is Expected Improvement (EI).
 
-**STEP 2: Setting up your experiment**  
-1. Create a callable objective function. See ../examples/branin/branin.py as an example  
-2. Create a config file. There are 3 example config files in the ../examples directory. Note 1: There are more parameters that can be set in the config files than what is shown in the examples, but these parameters all have default values. Note 2: By default Spearmint assumes your function is noisy (non-deterministic). If it is noise-free, you should set this explicitly as in the ../examples/simple/config.json file.
+### STEP 3: Running spearmint
+1. Start up a MongoDB daemon instance: mongod --fork --logpath \<path/to/logfile\> --dbpath \<path/to/dbfolder\>
+2. Run spearmint: "python main.py \</path/to/experiment/directory\>"
+(Try >>python main.py ../examples/toy)
 
-**STEP 3: Running spearmint**  
-1. Start up a MongoDB daemon instance:  
-`mongod --fork --logpath <path/to/logfile\> --dbpath <path/to/dbfolder\>`  
-2. Run spearmint: `python main.py \</path/to/experiment/directory\>`
+### STEP 4: Looking at your results
+Spearmint will output results to standard out / standard err and will also create output files in the experiment directory for each experiment. In addition, you can look at the results in the following ways:
+1. To print all results, run "python print_all_results.py \</path/to/experiment/directory\>"
+2. To create a plot showing the objective function decreasing over time, go to the "visualizations" directory and run "python progress_curve.py \</path/to/experiment/directory\>". The result will appear in a "plots" subdirectory of the experiment directory. If you look at the bottom of the progress curve file you will see a number of options such as plotting in the log scale, etc. 
+3. (2D objective functions only) To create plots of a 2D objective function (such as the examples provided), go to the visualizations directory and run "python plots_2d.py \</path/to/experiment/directory\>". They will appear in a "plots" subdirectory in the experiment directory.
 
-**STEP 4: Looking at your results**  
-Spearmint will output results to standard out / standard err. You can also load the results from the database and manipulate them directly. 
+### STEP 5: Cleanup
+If you want to delete all data associated with an experiment (output files, plots, database entries), run "python cleanup.py \</path/to/experiment/directory\>"
+
+#### (optional) Running multiple experiments at once
+You can start multiple experiments at once using "python run_experiments.py \</path/to/experiment/directory\> N" where N is the number of experiments to run. You can clean them up at once with "python cleanup_experiments.py \</path/to/experiment/directory\> N". Some of the helper functions above, such as progress_curve.py, are designed to work with this paradigm, so for example you can do "python progress_curve.py \</path/to/experiment/directory\> --repeat=10" to plot the average of 10 experiments with error bars.
+
+#### (optional) NLopt install instructions, without needing admin privileges 
+1. wget http://ab-initio.mit.edu/nlopt/nlopt-2.4.2.tar.gz
+2. tar -zxvf nlopt-2.4.2.tar.gz
+3. cd nlopt-2.4.2
+4. mkdir build
+5. ./configure PYTHON=PATH/TO/YOUR/PYTHON/python2.7 --enable-shared --prefix=PATH/TO/YOUR/NLOPT/nlopt-2.4.2/build/
+6. make
+7. make install
+8. export PYTHONPATH=PATH/TO/YOUR/NLOPT/nlopt-2.4.2/build/lib/python2.7/site-packages/:$PYTHONPATH
+9. (you can add line 8 to a .bashrc or equivalent file)

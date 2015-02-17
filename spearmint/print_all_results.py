@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Spearmint
+# spearmint
 #
 # Academic and Non-Commercial Research Use Software License and Terms
 # of Use
@@ -12,10 +12,10 @@
 # possible.
 #
 # The Software was developed by Ryan P. Adams, Michael Gelbart, and
-# Jasper Snoek at Harvard University, Kevin Swersky at the
-# University of Toronto (“Toronto”), and Hugo Larochelle at the
-# Université de Sherbrooke (“Sherbrooke”), which assigned its rights
-# in the Software to Socpra Sciences et Génie
+# Jasper Snoek and at Harvard University, Kevin Swersky and Richard
+# Zemel at the University of Toronto (“Toronto”), and Hugo Larochelle
+# at the Université de Sherbrooke (“Sherbrooke”), which assigned its
+# rights in the Software to Socpra Sciences et Génie
 # S.E.C. (“Socpra”). Pursuant to an inter-institutional agreement
 # between the parties, it is distributed for free academic and
 # non-commercial research use by the President and Fellows of Harvard
@@ -182,42 +182,61 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
-import warnings
+import os
+import sys
+import importlib
+import imp
+import pdb
+import numpy             as np
+import numpy.random      as npr
+import numpy.linalg      as npla
+import matplotlib        as mpl
+mpl.use('Agg')
+import matplotlib.pyplot as plt
 
-import numpy        as np
-import numpy.random as npr
+from spearmint.visualizations         import plots_2d
+from spearmint.utils.parsing          import parse_config_file
+from spearmint.utils.parsing          import parse_tasks_from_jobs
+from spearmint.utils.parsing          import repeat_experiment_name
+from spearmint.utils.parsing          import get_objectives_and_constraints
+from spearmint.utils.parsing          import DEFAULT_TASK_NAME
+from spearmint.utils.database.mongodb import MongoDB
+from spearmint.tasks.input_space      import InputSpace
+from spearmint.tasks.input_space      import paramify_no_types
+from spearmint.main                   import load_jobs
 
-from spearmint.transformations import Normalization
-from spearmint.utils           import priors
-from spearmint.utils.param     import Param as Hyperparameter
+def main(expt_dir, repeat=-1):
 
-def test_backward_pass():
-    npr.seed(1)
+    options         = parse_config_file(expt_dir, 'config.json')
+    experiment_name = options["experiment-name"]
 
-    eps = 1e-5
-    N   = 10
-    D   = 5
+    if repeat > 0:
+        experiment_name = repeat_experiment_name(experiment_name, repeat)
 
-    n = Normalization(D)
+    input_space     = InputSpace(options["variables"])
+    chooser_module  = importlib.import_module('spearmint.choosers.' + options['chooser'])
+    chooser         = chooser_module.init(input_space, options)
+    db              = MongoDB(database_address=options['database']['address'])
+    jobs            = load_jobs(db, experiment_name)
+    hypers          = db.load(experiment_name, 'hypers')
+    tasks           = parse_tasks_from_jobs(jobs, experiment_name, options, input_space)
 
-    data = 0.5*npr.rand(N,D)
-    new_data = n.forward_pass(data)
-    loss = np.sum(new_data**2)
-    V    = 2*new_data
+    for task_name, task in tasks.iteritems():
 
-    dloss = n.backward_pass(V)
-    
-    dloss_est = np.zeros(dloss.shape)
-    for i in xrange(N):
-        for j in xrange(D):
-            data[i,j] += eps
-            loss_1 = np.sum(n.forward_pass(data)**2)
-            data[i,j] -= 2*eps
-            loss_2 = np.sum(n.forward_pass(data)**2)
-            data[i,j] += eps
-            dloss_est[i,j] = ((loss_1 - loss_2) / (2*eps))
+        # print 'Printing results for task %s' % task_name
 
-    assert np.linalg.norm(dloss - dloss_est) < 1e-5
+        for i in xrange(len(task.values)):
+
+            print 'Iteration %d' % (i+1)
+            input_space.paramify_and_print(task.inputs[i], left_indent=0)
+            
+            print '%s: %s' % (task_name, task.values[i])
+
+            print ''
+            print ''
+
+if __name__ == '__main__':
+    main(*sys.argv[1:])
 
 
 

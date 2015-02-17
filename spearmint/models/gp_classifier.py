@@ -192,7 +192,7 @@ import scipy.optimize    as spo
 import scipy.io          as sio
 import scipy.stats       as sps
 import scipy.weave
-
+from collections import defaultdict
 
 from .gp                                     import GP
 from ..utils.param                           import Param as Hyperparameter
@@ -201,7 +201,9 @@ from ..sampling.slice_sampler                import SliceSampler
 from ..sampling.whitened_prior_slice_sampler import WhitenedPriorSliceSampler
 from ..sampling.elliptical_slice_sampler     import EllipticalSliceSampler
 from ..utils                                 import priors
-from ..transformations                       import BetaWarp, Transformer
+from ..                                      import transformations
+from ..transformations                       import Transformer
+from spearmint.utils.parsing                 import parse_priors_from_config
 
 try:
     module = sys.modules['__main__'].__file__
@@ -210,18 +212,37 @@ except:
     log = logging.getLogger()
     print 'Not running from main.'
 
+# I intentionally do not make this options a property of the class, because I don't
+# want to override the defaults of the GP class that I am inheriting from. Instead,
+# these defaults add to the GP defaults, and in case they disagree the defaults here are used. 
+# So, in order of most to least priority: config file, defaults here, defaults in gp.py
+OPTION_DEFAULTS = {
+    'ess_thinning'      : 10,
+    'prior_whitening'   : True,
+    'binomial_trials'   : 1,
+    'transformations'   : [],
+    'priors'            : {'amp2' : {'distribution':'Exponential', 'parameters':[1.0]}},
+    'verbose'           : False,
+    'sigmoid'           : 'probit',
+    'epsilon'           : 0.5,
+    'likelihood'        : 'binomial'
+}
+
 class GPClassifier(GP):
+
     def __init__(self, num_dims, **options):
-        self.counts = None
 
+        self.options = OPTION_DEFAULTS.copy() # keep the GP options, but update with GP classifier options
+        self.options.update(options)
         log.debug('GP Classifier initialized with options: %s' % (options))
-        self.ess_thinning = int(options.get("ess-thinning", 10))
 
-        self._set_likelihood(options)
-    
-        self.prior_whitening = options.get('prior-whitening', True)
 
-        sigmoid = options.get("sigmoid", "probit")
+        if self.options['likelihood'].lower() not in ['binomial', 'step']:
+            raise Exception("GP classifier only supports step or binomial likelihood, not %s" % (options['likelihood']))
+
+        self.noiseless = self.options['likelihood'].lower() == 'step'
+
+        sigmoid = self.options['sigmoid']
         if not self.noiseless:
             if sigmoid == "probit":
                 self.sigmoid            = sps.norm.cdf
@@ -247,40 +268,32 @@ class GPClassifier(GP):
         # we want f>0. This is equivalent to epsilon=0.5 for the sigmoids we use
         # The point is: do not set epsilon unless you know what you are doing!
         # (and do not confuse it with delta, the min constraint confidence)
-        self._one_minus_epsilon = 1.0 - float(options.get("epsilon", 0.5))
+        self._one_minus_epsilon = 1.0 - float(self.options["epsilon"])
+
+        self.counts = None
 
         self.latent_values_list = []
 
         super(GPClassifier, self).__init__(num_dims, **options)
+        # might be able to move this around now
 
-    def _set_likelihood(self, options):
-        self.likelihood = options.get('likelihood', 'binomial').lower()
-
-        if self.likelihood.lower() == "binomial":
-            self.noiseless = False
-        elif self.likelihood.lower() == "step":
-            self.noiseless = True
-        else:
-            raise Exception("GP classifier only supports step or binomial likelihood, not %s" % (options['likelihood']))
-
-    def _reset(self):
-        super(GPClassifier, self)._reset()
+    def reset_params(self):
+        super(GPClassifier, self).reset_params()
 
         # Reset the latent values
         if self.counts is not None:
-            initial_latent_vals = self.counts - 0.5
+            initial_latent_vals = self.counts/self.options['binomial_trials'] - 0.5
         else:
             initial_latent_vals = np.zeros(0)
 
-        self.latent_values.initial_value = initial_latent_vals
-        self.latent_values.reset_value()
+        self.latent_values.set_value(initial_latent_vals)
+        # self.latent_values.reset_value()
 
-        self._latent_values_list = []
 
     def _set_latent_values_from_dict(self, latent_values_dict):
         # Read in the latent values. For pre-existing data, just load them in
         # For new data, set them to a default.
-        default_latent_values = self.counts - 0.5
+        default_latent_values = self.counts/self.options['binomial_trials'] - 0.5
 
         latent_values = np.zeros(self._inputs.shape[0])
         for i in xrange(self._inputs.shape[0]):
@@ -294,26 +307,47 @@ class GPClassifier(GP):
         self.latent_values.value = latent_values
 
     def _burn_samples(self, num_samples):
-        # sys.stderr.write('GPClassifer: burning %s: ' % ', '.join(self.params.keys()))
-        # sys.stderr.write('%04d/%04d' % (0, num_samples))
-        for i in xrange(num_samples):
-            # sys.stderr.write('\b'*9+'%04d/%04d' % (i, num_samples))
-            for sampler in self._samplers:
-                sampler.sample(self)
+        if num_samples == 0:
+            return
 
+        print '  Burning %d samples...' % num_samples
+
+        if self.options['verbose']:
+            sys.stderr.write('GPClassifer: burning %s: ' % ', '.join(self.params.keys()))
+            sys.stderr.write('%05d/%05d' % (0, num_samples))
+        for i in xrange(num_samples):
+            if self.options['verbose']:
+                sys.stderr.write('\b'*11+'%05d/%05d' % (i, num_samples))
+            
+            # Sample hypers
+            for sampler in self._samplers:
+                sampler.sample(self) 
+
+            # Sample latent values
             self.latent_values_sampler.sample(self)
 
             self.chain_length += 1
-        # sys.stderr.write('\n')
+        
+        if self.options['verbose']:
+            sys.stderr.write('\n')
 
 
     def _collect_samples(self, num_samples):
-        # sys.stderr.write('GPClassifer: sampling %s: ' % ', '.join(self.params.keys()))
-        # sys.stderr.write('%04d/%04d' % (0, num_samples))
+        
+        for sampler in self._samplers:
+            print '  Sampling %d samples of %s with %s' % (num_samples, ', '.join(['%s(%d)'%(param.name, param.size()) for param in sampler.params]), sampler.__class__.__name__)
+        print '  Sampling latent values (size %d) with %s' % (self.latent_values.size(), self.latent_values_sampler.__class__.__name__)
+                
+
+        if self.options['verbose']:    
+            sys.stderr.write('GPClassifer: sampling %s: ' % ', '.join(self.params.keys()))
+            sys.stderr.write('%05d/%05d' % (0, num_samples))
+        
         hypers_list        = []
         latent_values_list = []
         for i in xrange(num_samples):
-            # sys.stderr.write('\b'*9+'%04d/%04d' % (i, num_samples))
+            if self.options['verbose']:
+                sys.stderr.write('\b'*11+'%05d/%05d' % (i, num_samples))
             for sampler in self._samplers:
                 sampler.sample(self)
 
@@ -325,50 +359,62 @@ class GPClassifier(GP):
 
             self.chain_length += 1
 
-        # sys.stderr.write('\n')
-        return hypers_list, latent_values_list
+        if self.options['verbose']:
+            sys.stderr.write('\n')
+        
+        self._hypers_list = hypers_list
+        self._latent_values_list = latent_values_list
+
 
     def _build(self):
-        self.params        = {}
+        self.params = dict()
         self.latent_values = None
 
-        # Build the transformer
-        beta_warp                 = BetaWarp(self.num_dims)
-        beta_alpha, beta_beta    = beta_warp.hypers
-        self.params['beta_alpha'] = beta_alpha
-        self.params['beta_beta']  = beta_beta
+        # TODO: move this into the parsing module as well --
+        # to do this properly i think the kernels should no longer "own" the default priors
+        # used. it would be good to have all the defaults in one place, namely the parsing
+        # module. 
+        nondefault_priors = defaultdict(lambda: None)
+        nondefault_priors.update(parse_priors_from_config(self.options['priors']))
 
+        # these should be in the right order because the json was parsed with an orderedDict
+        # could make this more robust by using a list instead...
         transformer = Transformer(self.num_dims)
-        transformer.add_layer(beta_warp)
+
+        for trans in self.options['transformations']:
+            assert len(trans) == 1 # this is the convention-- a list of length-1 dicts
+            trans_class = trans.keys()[0]
+            trans_options = trans.values()[0]
+            T = getattr(transformations,trans_class)(self.num_dims, **trans_options)
+            transformer.add_layer(T)
+            self.params.update({param.name:param for param in T.hypers})
+        # Default is BetaWarp (set in main.py)
+        # else: # default uses BetaWarp
+            # beta_warp = BetaWarp(self.num_dims)
+            # transformer.add_layer(beta_warp)
+            # self.params.update({param.name:param} for param in beta_warp.hypers)
+
 
         # Build the component kernels
-        input_kernel      = Matern52(self.num_dims)
-        ls                = input_kernel.hypers
-        self.params['ls'] = ls
-
-        # Now apply the transformation.
-        transform_kernel = TransformKernel(input_kernel, transformer)
-
-        # Add some perturbation for stability
-        stability_noise = Noise(self.num_dims)
-
-        # Finally make a noisy version if necessary
+        input_kernel           = Matern52(self.num_dims, prior=nondefault_priors['ls'])
+        stability_noise_kernel = Noise(self.num_dims) # Even if noiseless we use some noise for stability
+        
+        # make a noisy version if necessary
         # In a classifier GP the notion of "noise" is really just the scale.
         if self.noiseless:
-            self._kernel = SumKernel(transform_kernel, stability_noise)
+            self._kernel        = SumKernel(input_kernel, stability_noise_kernel)
         else:
-            scaled_kernel       = Scale(transform_kernel)
-            self._kernel        = SumKernel(scaled_kernel, stability_noise)
-            amp2                = scaled_kernel.hypers
-            self.params['amp2'] = amp2
+            scaled_input_kernel = Scale(input_kernel, prior=nondefault_priors['amp2'])
+            self._kernel        = SumKernel(scaled_input_kernel, stability_noise_kernel)
+            amp2                = scaled_input_kernel.hypers
 
-        # Build the mean function (just a constant mean for now)
-        self.mean = Hyperparameter(
-            initial_value = 0.0,
-            prior         = priors.Gaussian(0.0,1.0),
-            name          = 'mean'
-        )
-        self.params['mean'] = self.mean
+        # The final kernel applies the transformation.
+        self._kernel = TransformKernel(self._kernel, transformer)
+
+        # Get the hyperparameters to sample
+        ls                      = input_kernel.hypers
+
+        self.params['ls']   = ls
 
         # Buld the latent values. Empty for now until the GP gets data.
         self.latent_values = Hyperparameter(
@@ -376,25 +422,56 @@ class GPClassifier(GP):
             name           = 'latent values'
         )
 
-        # Build the samplers
-        to_sample = [self.mean] if self.noiseless else [self.mean, amp2]
-        self._samplers.append(SliceSampler(*to_sample, compwise=False, thinning=self.thinning))
-        self._samplers.append(WhitenedPriorSliceSampler(ls, beta_alpha, beta_beta, compwise=True, thinning=self.thinning))
-        self.latent_values_sampler = EllipticalSliceSampler(self.latent_values, thinning=self.ess_thinning)
 
+        if self.options['prior_whitening']:
+            self._samplers.append(WhitenedPriorSliceSampler(*self.params.values(), compwise=True, thinning=self.options['thinning']))
+        else:
+            self._samplers.append(SliceSampler(*self.params.values(), compwise=True, thinning=self.options['thinning']))
+
+        # Build the mean function (just a constant mean for now)
+        self.mean = Hyperparameter(
+            initial_value = 0.0,
+            prior         = priors.Gaussian(0.0,1.0) if nondefault_priors['mean'] is None else nondefault_priors['mean'],
+            name          = 'mean'
+        )
+        # self.params['mean'] = self.mean
+
+
+        # if self.noiseless:
+            # to_sample = [self.mean]
+        # else:
+            # to_sample = [self.mean, amp2]
+            # to_sample = [amp2]
+            # self.params['amp2'] = amp2
+
+        # self._samplers.append(SliceSampler(*to_sample, compwise=False, thinning=self.options['thinning']))
+
+        self.latent_values_sampler = EllipticalSliceSampler(self.latent_values, thinning=self.options['ess_thinning'])
+       
+    @property
+    def counts(self):
+        return self._values
+    @counts.setter
+    def counts(self, value):
+        self._values = value
+
+    # Here we make the values point to the latent values
+    # This is how the GP classifier can reuse so much code from the GP
     @property
     def values(self):
         if self.pending is None or len(self._fantasy_values_list) < self.num_states:
             return self.observed_values
 
-        if self.num_fantasies == 1:
+        if self.options['num_fantasies'] == 1:
             return np.append(self.latent_values.value, self._fantasy_values_list[self.state].flatten(), axis=0)
         else:
-            return np.append(np.tile(self.latent_values.value[:,None], (1,self.num_fantasies)), self._fantasy_values_list[self.state], axis=0)
+            return np.append(np.tile(self.latent_values.value[:,None], (1,self.options['num_fantasies'])), self._fantasy_values_list[self.state], axis=0)
 
+
+    # this is messed up. these are *NOT* the observed values. TODO
     @property
     def observed_values(self):
-        if self.latent_values is not None:
+        if self.latent_values is not None:  
             return self.latent_values.value
         else:
             return np.array([])
@@ -407,49 +484,6 @@ class GPClassifier(GP):
     def pi(self, pred, compute_grad=False):
         return super(GPClassifier, self).pi( pred, compute_grad=compute_grad, 
             C=self.sigmoid_inverse(self._one_minus_epsilon) )
-
-    def fit(self, inputs, counts, pending=None, hypers=None, reburn=False, fit_hypers=True):
-        # Set the data for the GP
-        self._inputs = inputs
-        self.counts  = counts
-
-        # Reset the GP
-        self._reset()
-
-        # Initialize the GP with hypers if provided
-        if hypers:
-            self.from_dict(hypers)
-
-        if fit_hypers:
-            # Burn samples (if needed)
-            num_samples = self.burnin if reburn or self.chain_length < self.burnin else 0
-            self._burn_samples(num_samples)
-
-            # Now collect some samples
-            self._hypers_list, self._latent_values_list = self._collect_samples(self.mcmc_iters)
-
-            # Now we have more states
-            self.num_states = self.mcmc_iters
-        elif not self._hypers_list:
-            # Just use the current hypers as the only state
-            current_dict             = self.to_dict()
-            self._hypers_list        = [current_dict['hypers']]
-            self._latent_values_list = [current_dict['latent values']]
-            self.num_states          = 1
-
-        # Set pending data and generate corresponding fantasies
-        if pending is not None:
-            self.pending              = pending
-            self._fantasy_values_list = self._collect_fantasies(pending)
-
-        # Get caching ready
-        if self.caching:
-            self._prepare_cache()
-
-        # Set the hypers to the final state of the chain
-        self.set_state(len(self._hypers_list)-1)
-
-        return self.to_dict()
 
     def log_binomial_likelihood(self, y=None):
         # If no data, don't do anything
@@ -467,7 +501,7 @@ class GPClassifier(GP):
         # This messes things up. So we use the safer implementation below that ignores
         # the term entirely if the counts are 0.
         pos = self.counts # positive counts
-        neg = 1 - pos
+        neg = self.options['binomial_trials'] - pos
 
         with np.errstate(divide='ignore'):  # suppress warnings about log(0)
             return np.sum( pos[pos>0]*np.log(p[pos>0]) ) + np.sum( neg[neg>0]*np.log(1-p[neg>0]) )

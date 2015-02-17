@@ -191,17 +191,17 @@ from ..utils.param    import Param as Hyperparameter
 
 
 class Noise(AbstractKernel):
-    def __init__(self, num_dims, noise=None, name='Noise'):
+    def __init__(self, num_dims, name='noise', prior=None, value=1e-6):
         self.name     = name
         self.num_dims = num_dims
 
-        default_noise = Hyperparameter(
-            initial_value = 1e-6,
-            prior         = priors.NonNegative(priors.Horseshoe(0.1)),
-            name          = 'noise'
+        self.noise = Hyperparameter(
+            initial_value = value,
+            prior         = priors.NonNegative(priors.Horseshoe(0.1)) if prior is None else prior,
+            # prior         = priors.Exponential(mean=0.01) if prior is None else prior,
+            # prior         = priors.Scale(priors.Beta(1.0, 5.0), 2.0) if prior is None else prior,
+            name          = name
         )
-
-        self.noise = noise if noise is not None else default_noise
 
     @property
     def hypers(self):

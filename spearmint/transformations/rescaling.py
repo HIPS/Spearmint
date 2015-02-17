@@ -182,38 +182,49 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
-import numpy        as np
-import numpy.random as npr
 
-from spearmint.kernels import Matern52
+import numpy as np
 
-def test_matern_grad():
-    npr.seed(1)
+from .abstract_transformation import AbstractTransformation
+from ..utils                  import priors
+from ..utils.param            import Param as Hyperparameter
 
-    eps = 1e-5
-    N   = 10
-    M   = 5
-    D   = 3
+"""
+This transformation assumes the bounds of the data are already set to [0,1].
+This transformation takes the data in [0,0.5] and linearly
+scales it into the interval [0, scale].
+And then it takes the data in [0.5, 1] and scales it into [scale, 1]
+So, if scale=0.5 it does nothing.
+But if scale is not 0.5 it warps the data. 
+"""
+class Rescaling(AbstractTransformation):
+    def __init__(self, num_dims, dims=[0], scale=0.5, name="Rescaling"):
+        self.name        = name
+        self.num_dims    = num_dims
+        self.dims        = dims
+        self.scale       = scale
 
-    kernel = Matern52(D)
+    def forward_pass(self, inputs):
+        if self.dims.size == 0:
+            return inputs
 
-    data1 = npr.randn(N,D)
-    data2 = npr.randn(M,D)
+        self._inputs = inputs
 
-    loss  = np.sum(kernel.cross_cov(data1, data2))
-    dloss = kernel.cross_cov_grad_data(data1, data2).sum(0)
-    
-    dloss_est = np.zeros(dloss.shape)
-    for i in xrange(M):
-        for j in xrange(D):
-            data2[i,j] += eps
-            loss_1 = np.sum(kernel.cross_cov(data1, data2))
-            data2[i,j] -= 2*eps
-            loss_2 = np.sum(kernel.cross_cov(data1, data2))
-            data2[i,j] += eps
-            dloss_est[i,j] = ((loss_1 - loss_2) / (2*eps))
+        scaled_inputs = inputs.copy()
+        si = scaled_inputs[:,self.dims]
+        si[si>0.5] = (si[si>0.5]-0.5)*2.0*(1-self.scale)+self.scale
+        si[si<=0.5] *= (self.scale*2.0)
+        scaled_inputs[:,self.dims] = si
+        return scaled_inputs
 
-    assert np.linalg.norm(dloss - dloss_est) < 1e-6
+    def backward_pass(self, V):
+        if self.dims.size == 0:
+            return V
 
+        dx = np.zeros(self._inputs.shape)
 
+        x = self._inputs[:,self.dims]
+        dx[:, self.dims][x <= 0.5] = self.scale*2.0
+        dx[:, self.dims][x > 0.5] = (1-self.scale)*2.0
 
+        return dx*V

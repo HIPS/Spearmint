@@ -182,48 +182,52 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
-import numpy        as np
-import numpy.random as npr
 
-from spearmint.kernels         import Matern52, TransformKernel
-from spearmint.transformations import BetaWarp, Normalization, Linear, Transformer
+import numpy as np
+import kernel_utils
 
-def test_grad():
-    npr.seed(1)
+from .abstract_kernel import AbstractKernel
+from ..utils          import priors
+from ..utils.param    import Param as Hyperparameter
 
-    eps = 1e-5
-    N   = 10
-    M   = 5
-    D   = 5
+class SquaredExp(AbstractKernel):
+    def __init__(self, num_dims, value=None, name='SquaredExp', prior=None):
+        self.name     = name
+        self.num_dims = num_dims
 
-    beta_warp   = BetaWarp(2)
-    norm        = Normalization(2)
-    lin         = Linear(D)
-    transformer = Transformer(D)
-    # Each entry is a tuple, (transformation, indices_it_acts_on)
-    transformer.add_layer((beta_warp,[0,2]), (norm, [1,4])) # This is crazy. We would never do this.
-    # One transformation means apply to all dimensions.
-    transformer.add_layer(lin)
+        self.ls = Hyperparameter(
+            initial_value = np.ones(self.num_dims) if value is None else value,
+            prior         = priors.Tophat(0,10)    if prior is None else prior,
+            name          = 'ls'
+        )
 
-    kernel = TransformKernel(Matern52(lin.num_factors), transformer)
+        assert self.ls.value.shape[0] == self.num_dims
 
-    data1 = npr.rand(N,D)
-    data2 = npr.rand(M,D)
+    @property
+    def hypers(self):
+        return self.ls
 
-    loss  = np.sum(kernel.cross_cov(data1, data2))
-    dloss = kernel.cross_cov_grad_data(data1, data2).sum(0)
-    
-    dloss_est = np.zeros(dloss.shape)
-    for i in xrange(M):
-        for j in xrange(D):
-            data2[i,j] += eps
-            loss_1 = np.sum(kernel.cross_cov(data1, data2))
-            data2[i,j] -= 2*eps
-            loss_2 = np.sum(kernel.cross_cov(data1, data2))
-            data2[i,j] += eps
-            dloss_est[i,j] = ((loss_1 - loss_2) / (2*eps))
+    def cov(self, inputs):
+        return self.cross_cov(inputs, inputs)
 
-    assert np.linalg.norm(dloss - dloss_est) < 1e-6
+    def diag_cov(self, inputs):
+        return np.ones(inputs.shape[0])
 
+    def cross_cov(self, inputs_1, inputs_2):
+        r2  = np.abs(kernel_utils.dist2(self.ls.value, inputs_1, inputs_2))
+        cov = np.exp(-0.5*r2)
 
+        return cov
+
+    def cross_cov_grad_data(self, inputs_1, inputs_2):
+        # NOTE: This is the gradient wrt the inputs of inputs_2
+        # The gradient wrt the inputs of inputs_1 is -1 times this
+        r2        = np.abs(kernel_utils.dist2(self.ls.value, inputs_1, inputs_2))
+        r         = np.sqrt(r2)
+        grad_K_r2 = np.exp(-0.5*r2)*(-r)
+
+        grad_r2_x1 = kernel_utils.grad_dist2(self.ls.value, inputs_1, inputs_2)
+        grad_r2_x2 = -grad_r2_x1
+
+        return grad_K_r2[:,:,None] * grad_r2_x2
 

@@ -182,78 +182,238 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
-import warnings
+import numpy          as np
+import scipy.stats    as sps
+from spearmint.acquisition_functions.abstract_acquisition_function import AbstractAcquisitionFunction
+from spearmint.acquisition_functions.constraints_helper_functions import total_constraint_confidence
 
-import numpy        as np
-import numpy.random as npr
+def compute_ei(model, pred, ei_target=None, compute_grad=True):
+    if model.pending:
+        return compute_ei_pending(model, pred, ei_target, compute_grad)
 
-from nose.tools import assert_raises
+    if pred.ndim == 1:
+        pred = pred[None,:]
 
-from spearmint.transformations import KumarWarp
-from spearmint.utils           import priors
-from spearmint.utils.param     import Param as Hyperparameter
+    if not compute_grad:
+        mean, var = model.predict(pred)
+    else:
+        mean, var, grad_mean_x, grad_var_x = model.predict(pred, compute_grad=True)
 
-def test_validation():
-    warnings.filterwarnings('error')
-    npr.seed(1)
+    # Expected improvement
+    sigma  = np.sqrt(var)
+    z      = (ei_target - mean) / sigma
+    ncdf   = sps.norm.cdf(z)
+    npdf   = sps.norm.pdf(z)
+    ei     = (ei_target - mean) * ncdf + sigma * npdf
 
-    N   = 10
-    D   = 3
+    if not compute_grad:
+        return ei
 
-    kw = KumarWarp(D)
+    # ei = np.sum(ei)
 
-    data = npr.randn(N,D)
+    # Gradients of ei w.r.t. mean and variance            
+    g_ei_m = -ncdf
+    g_ei_s2 = 0.5*npdf / sigma
+    
+    # Gradient of ei w.r.t. the inputs
+    grad_ei_x = grad_mean_x*g_ei_m + grad_var_x*g_ei_s2
 
-    assert_raises(UserWarning, kw.forward_pass, data)
+    return ei, grad_ei_x
 
-def test_forward_pass():
-    npr.seed(1)
+def compute_ei_pending(model, pred, ei_target=None, compute_grad=True):
+    # TODO: use ei_target!!
+    if pred.ndim == 1:
+        pred = pred[None,:]
 
-    N   = 10
-    D   = 3
+    if not compute_grad:
+        func_m, func_v = model.predict(pred)
+    else:
+        (func_m,
+        func_v,
+        grad_xp_m,
+        grad_xp_v) = model.predict(pred, compute_grad=True)
 
-    alpha = Hyperparameter(
-        initial_value = 2*np.ones(D),
-        prior         = priors.Lognormal(1.5),
-        name          = 'alpha'
-    )
+    if func_m.ndim == 1:
+        func_m = func_m[:,np.newaxis]
+    if func_v.ndim == 1:
+        func_v = func_v[:,np.newaxis]
 
-    beta = Hyperparameter(
-        initial_value = 0.5*np.ones(D),
-        prior         = priors.Lognormal(1.5),
-        name          = 'beta'
-    )
+    if compute_grad:
+        if grad_xp_m.ndim == 2:
+            grad_xp_m = grad_xp_m[:,:,np.newaxis]
+        if grad_xp_v.ndim == 2:
+            grad_xp_v = grad_xp_v[:,:,np.newaxis]
 
-    bw = KumarWarp(D, alpha=alpha, beta=beta)
+    ei_values = model.values.min(axis=0)
 
-    data = 0.5*np.ones(D)
+    ei_values = np.array(ei_values)
+    if ei_values.ndim == 0:
+        ei_values = np.array([[ei_values]])
 
-    assert np.all(bw.forward_pass(data) == 0.1339745962155614)
+    # Expected improvement
+    func_s = np.sqrt(func_v)
+    u      = (ei_values - func_m) / func_s
+    ncdf   = sps.norm.cdf(u)
+    npdf   = sps.norm.pdf(u)
+    ei     = np.mean(func_s*( u*ncdf + npdf),axis=1)
 
-def test_backward_pass():
-    npr.seed(1)
+    if not compute_grad:
+        return ei
 
-    N   = 10
-    D   = 3
+    ei = np.sum(ei)
 
-    alpha = Hyperparameter(
-        initial_value = 2*np.ones(D),
-        prior         = priors.Lognormal(1.5),
-        name          = 'alpha'
-    )
+    # Gradients of ei w.r.t. mean and variance            
+    g_ei_m = -ncdf
+    g_ei_s2 = 0.5*npdf / func_s
+    
+    # Gradient of ei w.r.t. the inputs
+    grad_xp = (grad_xp_m*np.tile(g_ei_m,(pred.shape[1],1))).T + (grad_xp_v.T*g_ei_s2).T
+    grad_xp = np.mean(grad_xp,axis=0)
 
-    beta = Hyperparameter(
-        initial_value = 0.5*np.ones(D),
-        prior         = priors.Lognormal(1.5),
-        name          = 'beta'
-    )
-
-    bw = KumarWarp(D, alpha=alpha, beta=beta)
-
-    data = 0.5*np.ones(D)
-    v    = npr.randn(D)
-
-    bw.forward_pass(data)
-    assert np.all(bw.backward_pass(v) == 0.5773502691896257*v)
+    return ei, grad_xp.flatten()
 
 
+def constraint_weighted_ei(obj_model, constraint_models, cand, current_best, compute_grad):
+
+    numConstraints = len(constraint_models)
+
+    if cand.ndim == 1:
+        cand = cand[None]
+
+    N_cand = cand.shape[0]
+
+    ############## ---------------------------------------- ############
+    ##############                                          ############
+    ##############   Part that depends on the objective     ############
+    ##############                                          ############
+    ############## ---------------------------------------- ############
+    if current_best is None:
+        ei = 1.
+        ei_grad = 0.
+    else:
+        target = current_best
+ 
+        # Compute the predictive mean and variance
+        if not compute_grad:
+            ei = compute_ei(obj_model, cand, target, compute_grad=compute_grad)
+        else:
+            ei, ei_grad = compute_ei(obj_model, cand, target, compute_grad=compute_grad)
+
+    ############## ---------------------------------------- ############
+    ##############                                          ############
+    ##############  Part that depends on the constraints    ############
+    ##############                                          ############
+    ############## ---------------------------------------- ############
+    # Compute p(valid) for ALL constraints
+    if not compute_grad:
+        p_valid_prod = total_constraint_confidence(constraint_models, cand, compute_grad=False)
+    else:
+        p_valid_prod, p_grad_prod = total_constraint_confidence(constraint_models, cand, compute_grad=True)
+
+    ############## ---------------------------------------- ############
+    ##############                                          ############
+    ##############    Combine the two parts (obj and con)   ############
+    ##############                                          ############
+    ############## ---------------------------------------- ############
+
+    acq = ei * p_valid_prod
+
+    if not compute_grad:
+        return acq
+    else:
+        return acq, ei_grad * p_valid_prod + p_grad_prod * ei
+
+
+def ei_evaluate_constraint_only(obj_model, constraint_models, cand, current_best, compute_grad):
+
+    improvement = lambda mean: np.maximum(0.0, current_best-mean)
+    improvement_grad = lambda mean_grad: -mean_grad*np.less(mean, current_best).flatten()
+
+    # If unconstrained, just compute the GP mean
+    if len(constraint_models) == 0:
+        if compute_grad:
+            mean, var, grad_mean_x, grad_var_x = obj_model.predict(cand, compute_grad=True)
+            return improvement(mean), improvement_grad(grad_mean_x)
+        else:
+            mean, var = obj_model.predict(cand, compute_grad=False)
+            return improvement(mean)
+
+    if cand.ndim == 1:
+        cand = cand[None]
+
+    N_cand = cand.shape[0]
+
+    ############## ---------------------------------------- ############
+    ##############                                          ############
+    ##############   Part that depends on the objective     ############
+    ##############                                          ############
+    ############## ---------------------------------------- ############
+    if current_best is None:
+        ei = 1.
+        ei_grad = 0.
+    else:
+        target = current_best
+
+        # Compute the predictive mean and variance
+        if not compute_grad:
+            mean, var = obj_model.predict(cand, compute_grad=False)
+        else:
+            mean, var, grad_mean_x, grad_var_x = obj_model.predict(cand, compute_grad=True)
+            ei_grad = improvement_grad(grad_mean_x)
+        ei = improvement(mean)
+    ############## ---------------------------------------- ############
+    ##############                                          ############
+    ##############  Part that depends on the constraints    ############
+    ##############                                          ############
+    ############## ---------------------------------------- ############
+    # Compute p(valid) for ALL constraints
+    if not compute_grad:
+        p_valid_prod = total_constraint_confidence(constraint_models, cand, compute_grad=False)
+    else:
+        p_valid_prod, p_grad_prod = total_constraint_confidence(constraint_models, cand, compute_grad=True)
+
+    ############## ---------------------------------------- ############
+    ##############                                          ############
+    ##############    Combine the two parts (obj and con)   ############
+    ##############                                          ############
+    ############## ---------------------------------------- ############
+
+    acq = ei * p_valid_prod
+
+    if not compute_grad:
+        return acq
+    else:
+        return acq, ei_grad * p_valid_prod + p_grad_prod * ei
+
+
+
+
+class ExpectedImprovement(AbstractAcquisitionFunction):
+    """ This is regular expected improvement when there are no constraints,
+        and the constraint-weighted EI when there are constraints. """
+    def acquisition(self, objective_model_dict, constraint_models_dict, cand, current_best, compute_grad, tasks=None):
+        if tasks is not None and set(tasks) != set(objective_model_dict.keys()).union(set(constraint_models_dict.keys())):
+            print tasks
+            print objective_model_dict.keys()
+            print constraint_models_dict.keys()
+            raise Exception("ExpectedImprovement does not have competitive decouplings implemented") 
+
+        objective_model = objective_model_dict.values()[0]
+        if len(constraint_models_dict) == 0:
+            return compute_ei(objective_model, cand, 
+                ei_target=current_best, compute_grad=compute_grad)
+        else:
+            return constraint_weighted_ei(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)
+
+
+class ConstraintAndMean(AbstractAcquisitionFunction):
+    """  This class is not useful in most contexts. I suggest never using it.
+ It computes real the expected improvement assuming you only evaluate the constraints
+ Probability of satisfying the constraints multiplied
+ by the objective GP mean "improvement", 
+ max(0,best-mean)
+ rather than EI. the problem with it is that it 
+ suffers from the chicken and egg pathology for decoupled constraints.
+ It's good if the objective is known and the constraint is unknown  """
+    def acquisition(self, objective_model, constraint_models_dict, cand, current_best, compute_grad):
+        return ei_evaluate_constraint_only(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)

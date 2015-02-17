@@ -1,6 +1,6 @@
 {
     "language"        : "PYTHON",
-    "main-file"       : "branin_noisy.py",
+    "main_file"       : "branin_noisy.py",
     "experiment-name" : "braninhoo_noisy",
     "likelihood"      : "GAUSSIAN",
     "variables" : {

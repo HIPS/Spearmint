@@ -207,6 +207,8 @@ def dist2(ls, x1, x2=None):
 
     return r2
 
+
+# The gradient of the squared distance with respect to x1
 def grad_dist2(ls, x1, x2=None):
     if x2 is None:
         x2 = x1
@@ -227,14 +229,13 @@ def grad_dist2(ls, x1, x2=None):
         for (int d=0; d<D; d++)
           gX(i,j,d) = (2/ls(d))*(x1(i,d) - x2(j,d));
     """
-    try:
-        scipy.weave.inline(code, ['x1','x2','gX','ls','M','N','D'], \
-                           type_converters=scipy.weave.converters.blitz, \
-                           compiler='gcc')
-    except:
+    scipy.weave.inline(code, ['x1','x2','gX','ls','M','N','D'], \
+                       type_converters=scipy.weave.converters.blitz, \
+                       compiler='gcc')
+
     # The C code weave above is 10x faster than this:
-        for i in xrange(0,x1.shape[0]):
-            gX[i,:,:] = 2*(x1[i,:] - x2[:,:])*(1/ls)
+    #for i in xrange(0,x1.shape[0]):
+    #    gX[i,:,:] = 2*(x1[i,:] - x2[:,:])*(1/ls)
 
     return gX
 

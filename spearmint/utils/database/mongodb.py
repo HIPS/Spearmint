@@ -212,28 +212,15 @@ class MongoDB(AbstractDB):
         if field_filters is None:
             field_filters = {}
 
+        # This is a bit tricky.
+        save_doc.update(field_filters)
+
         save_doc = compress_nested_container(save_doc)
 
         dbcollection = self.db[experiment_name][experiment_field]
-        dbdocs       = list(dbcollection.find(field_filters))
+        # dbdocs       = list(dbcollection.find(field_filters))
 
-        upsert = False
-
-        if len(dbdocs) > 1:
-            raise Exception('Ambiguous save attempted. Field filters returned more than one document.')
-        elif len(dbdocs) == 1:
-            dbdoc = dbdocs[0]
-        else:
-            #sys.stderr.write('Document not found, inserting new document.\n')
-            upsert = True
-
-        #TODO: change this to find_and_modify
-        result = dbcollection.update(field_filters, save_doc, upsert=upsert)
-
-        if upsert:
-            return result['upserted']
-        else:
-            return result['updatedExisting']
+        return dbcollection.find_and_modify(field_filters, save_doc, upsert=True)
 
     def load(self, experiment_name, experiment_field, field_filters=None):
         # Return a list of documents from the database, decompressing any numpy arrays

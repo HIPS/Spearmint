@@ -252,18 +252,18 @@ class Horseshoe(AbstractPrior):
         # return npr.multivariate_normal()
 
 class Lognormal(AbstractPrior):
-    def __init__(self, scale, mean=0):
+    def __init__(self, scale, mean=1):
         self.scale = scale
         self.mean = mean
 
     def logprob(self, x):
-        return np.sum(sps.lognorm.logpdf(x, self.scale, loc=self.mean))
+        return np.sum(sps.lognorm.logpdf(x, self.scale, scale=self.mean))
 
     def sample(self, n_samples):
         return npr.lognormal(mean=self.mean, sigma=self.scale, size=n_samples)
 
 class LognormalTophat(AbstractPrior):
-    def __init__(self, scale, xmin, xmax, mean=0):
+    def __init__(self, scale, xmin, xmax, mean=1):
         self.scale = scale
         self.mean  = mean
         self.xmin  = xmin
@@ -276,7 +276,7 @@ class LognormalTophat(AbstractPrior):
         if np.any(x < self.xmin) or np.any(x > self.xmax):
             return -np.inf
         else:
-            return np.sum(sps.lognorm.logpdf(x, self.scale, loc=self.mean))
+            return np.sum(sps.lognorm.logpdf(x, self.scale, scale=self.mean))
 
     def sample(self, n_samples):
         raise Exception('Sampling of LognormalTophat is not implemented.')
@@ -314,7 +314,19 @@ class Exponential(AbstractPrior):
     def sample(self, n_samples):
         return npr.exponential(scale=self.mean, size=n_samples)
 
+# We put sums everywhere so that we can use priors for multidimensional variables
+# But this makes the sampling not OK, because it only samples a scalar...
+#  should fix this at some point... TODO
+class Beta(AbstractPrior):
+    def __init__(self, alpha, beta):
+        self.alpha = alpha
+        self.beta  = beta
 
+    def logprob(self, x):
+        return np.sum(sps.beta.logpdf(x, self.alpha, self.beta))
+
+    def sample(self, n_samples):
+        return npr.beta(self.alpha, self.beta, size=n_samples)
 
 class Gaussian(AbstractPrior):
     def __init__(self, mu, sigma):
@@ -347,6 +359,19 @@ class NoPrior(AbstractPrior):
 
     def logprob(self, x):
         return 0.0
+
+# This class takes in another prior in its constructor and linearly scales the input variable
+class Scale(AbstractPrior):
+    def __init__(self, prior, scale):
+        self.prior = prior
+        self.scale = scale
+
+        if hasattr(prior, 'sample'):
+            self.sample = lambda n_samples: self.prior.sample(n_samples)*self.scale
+
+    def logprob(self, x):
+        return self.prior.logprob(x/self.scale)
+
 
 # This class takes in another prior in its constructor
 # And gives you the nonnegative version (actually the positive version, to be numerically safe)
@@ -396,24 +421,4 @@ class ProductOfPriors(AbstractPrior):
 # class Bernoulli(Binomial):
 #     def __init__(self, p):
 #         super(Bernoulli, self).__init__(p, 1)
-
-
-def ParseFromOptions(options):
-    parsed = dict()
-    for p in options:
-        prior_class = eval(options[p]['distribution'])
-        args = options[p]['parameters']
-
-        # If they give a list, just stick them in order
-        # If they give something else (hopefully a dict of some sort), pass them in as kwargs
-        if isinstance(args, list):
-            parsed[p] = prior_class(*args)
-        elif isinstance(args, dict): # use isinstance() not type() so that defaultdict, etc are allowed
-            parsed[p] = prior_class(**args)
-        else:
-            raise Exception("Prior parameters must be list or dict type")
-
-    return parsed
-
-
 

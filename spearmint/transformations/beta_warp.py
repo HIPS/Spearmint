@@ -191,27 +191,6 @@ from ..utils                  import priors
 from ..utils.param            import Param as Hyperparameter
 
 
-def truncate_inputs(func):
-    """
-    Decorator function.
-
-    Truncates the inputs to lie between 0 and 1 if it doesn't already.
-    This is to prevent small rounding errors from making the beta cdf and pdf
-    go crazy. If the inputs genuinely lives outside of [0,1] then we obviously
-    don't want to do this, so print out a warning just in case.
-    """
-    def inner(cls_instance, inputs, *args):
-        inputs = inputs.copy()
-        if np.any(inputs < 0):
-            warnings.warn('BetaWarp encountered negative values: %s' % inputs[inputs<0])
-            inputs[inputs<0] = 0.0
-        if np.any(inputs > 1):
-            warnings.warn('BetaWarp encountered values above 1: %s' % inputs[inputs>1])
-            inputs[inputs>1] = 1.0
-
-        return func(cls_instance, inputs, *args)
-    return inner
-
 class BetaWarp(AbstractTransformation):
     def __init__(self, num_dims, alpha=None, beta=None, name="BetaWarp"):
         self.name     = name
@@ -219,14 +198,14 @@ class BetaWarp(AbstractTransformation):
 
         default_alpha = Hyperparameter(
             initial_value = np.ones(num_dims),
-            prior         = priors.LognormalTophat(1.5,0.1,10),
-            name          = 'alpha'
+            prior         = priors.LognormalTophat(0.5,0.1,30.0,mean=5), # 0.1 --> 1.0
+            name          = 'betawarp_alpha'
         )
 
         default_beta = Hyperparameter(
             initial_value = np.ones(num_dims),
-            prior         = priors.LognormalTophat(1.5,0.1,10),
-            name          = 'beta'
+            prior         = priors.LognormalTophat(0.5,0.1,30.0,mean=5),
+            name          = 'betawarp_beta'
         )
 
         self.alpha  = alpha if alpha is not None else default_alpha
@@ -238,8 +217,21 @@ class BetaWarp(AbstractTransformation):
     def hypers(self):
         return (self.alpha, self.beta)
 
-    @truncate_inputs
     def forward_pass(self, inputs):
+        """
+    Truncate the inputs to lie between 0 and 1 if it doesn't already.
+    This is to prevent small rounding errors from making the beta cdf and pdf
+    go crazy. If the inputs genuinely lives outside of [0,1] then we obviously
+    don't want to do this, so print out a warning just in case.
+        """
+        inputs = inputs.copy()
+        if np.any(inputs < 0):
+            warnings.warn('BetaWarp encountered negative values: %s' % inputs[inputs<0])
+            inputs[inputs<0] = 0.0
+        if np.any(inputs > 1):
+            warnings.warn('BetaWarp encountered values above 1: %s' % inputs[inputs>1])
+            inputs[inputs>1] = 1.0
+
         self._inputs = inputs
 
         return sps.beta.cdf(inputs, self.alpha.value, self.beta.value)
