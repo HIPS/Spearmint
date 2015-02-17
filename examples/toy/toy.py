@@ -1,3 +1,4 @@
+# The toy problem in http://arxiv.org/abs/1403.4890
 import numpy as np
 
 def main(job_id, params):
