@@ -217,20 +217,6 @@ GRID_SIZE = 1000 # used in a hacky way when chooser passes in the grid
 FOR GP MODELS ONLY
 """
 
-"""
-The thing is that for each sample of the hyper-parameters, you have to
-draw a sample of x_\star, the global solution of the problem, from its
-posterior distribution. However, it may happen that for some samples
-of the hyper-parameters, the posterior probability of the constraint
-being satisfied at least at one point of the input space can be very
-small and close to zero (when you condition to the drawn
-hyper-parameters). This may happen when for example you have collected
-data only at two infeasible locations that have the same value of the
-constraint (assuming zero noise). Then you may get some posterior
-samples of the hyper-parameters for the constraint that say that the
-constraint is a constant function. When this happens there are no
-feasible points and you cannot sample x_\star. What to do?
-"""
 # get samples of the solution to the problem
 def sample_solution(grid, num_dims, objective_gp, constraint_gps=[]):
     assert num_dims == grid.shape[1]
@@ -249,31 +235,14 @@ def sample_solution(grid, num_dims, objective_gp, constraint_gps=[]):
         gp_samples['constraints'] = [sample_gp_with_random_features(constraint_gp, \
             NUM_RANDOM_FEATURES) for constraint_gp in constraint_gps]
 
-        # f = gp_samples['objective']
-        # print 'max:%f, min:%f   %d' % (np.max(f(grid, False)), np.min(f(grid, False)), len(f(grid, False)))
-        # for f in gp_samples['constraints']:
-        #     print 'max:%f, min:%f   %d' % (np.max(f(grid, False)), np.min(f(grid, False)), len(f(grid, False)))
-
         x_star_sample = global_optimization_of_GP_approximation(gp_samples, num_dims, grid)
 
         if x_star_sample is not None: # success
             logging.debug('successfully sampled x* in %d attempt(s)' % (num_attempts+1))
 
-            # obj_at_x_star = gp_samples['objective'](x_star_sample, gradient=False)
-            # con_at_x_star = [sample(x_star_sample, gradient=False) for sample in gp_samples['constraints']]
-            # print 'Sampled x* after %d attempts. obj = %s, con=%s' % (num_attempts, obj_at_x_star, con_at_x_star)
-            # print 'obj mean = %+f, var = %f' % objective_gp.predict(x_star_sample)
-            # print 'c1  mean = %+f, var = %f' % constraint_gps[0].predict(x_star_sample)
-            # if len(constraint_gps) > 1:
-            #     print 'c2  mean = %+f, var = %f' % constraint_gps[1].predict(x_star_sample)
             return x_star_sample
 
         num_attempts += 1
-        # print x_star_sample
-
-        # ok this gets messy for binomial constraints, where it's not just >= 0
-        # damn. need to think about this in terms of gradients
-        # will it be an issue?? ... hmmm
 
     logging.info('Failed to sample x*')
 
@@ -317,8 +286,6 @@ def logSumExp(a,b):
     result[a<=b] = b[a<=b] + log_1_plus_exp_x(a[a<=b]-b[a<=b])
     return result
 
-
-
 # Compute log(1+exp(x)) in a robust way
 def log_1_plus_exp_x_scalar(x):
     if x < np.log(1e-6):
@@ -340,7 +307,6 @@ def log_1_plus_exp_x(x):
     result[x < np.log(1e-6)] = np.exp(x[x < np.log(1e-6)])
     result[x > np.log(100) ] = x [x > np.log(100) ]
     return result
-
 
 # Compute log(1-exp(x)) in a robust way, when exp(x) is between 0 and 1 
 # well, exp(x) is always bigger than 0
@@ -380,14 +346,11 @@ def log_1_minus_exp_x(x):
 def chol2inv(chol):
     return spla.cho_solve((chol, False), np.eye(chol.shape[0]))
 
-
 def matrixInverse(M):
     return chol2inv(spla.cholesky(M, lower=False))
 
-
 def ep(obj_model, con_models, x_star, minimize=True):
     # We construct the Vpred matrices and the mPred vectors
-
     n = obj_model.observed_values.size
     obj = 'objective'
     con = con_models.keys()
@@ -475,31 +438,14 @@ def ep(obj_model, con_models, x_star, minimize=True):
                 a = aOld
                 damping *= 0.5
 
-                # print 'reducing damping to %f' % damping
-
                 if damping < 1e-5:
-                    # print 'giving up'
                     aNew = aOld
-                    break  # things failed, you are done...??
+                    break
             else:
-                # print "success"
                 break # things worked, you are done
 
         # We check for convergence
         a = aNew
-
-        # print np.sum(a['m'][obj])
-        # print np.sum(a['m']['c1'])
-        # print np.sum(a['V'][obj])
-        # print np.sum(a['V']['c1'])
-        # print '-'
-        # print np.sum(a['Ahfhat'])
-        # print np.sum(a['bhfhat'])
-        # print np.sum(a['ahchat']['c1']) # a bit off 
-        # print np.sum(a['bhchat']['c1']) # a bit off
-        # print np.sum(a['agchat']['c1'])
-        # print np.sum(a['bgchat']['c1'])
-        # print '---'
 
         change = 0.0
         for t in all_tasks:
@@ -512,10 +458,6 @@ def ep(obj_model, con_models, x_star, minimize=True):
 
         damping   *= 0.99
         iteration += 1
-
-    # print "**done EP"
-
-
 
     # We update the means and covariance matrices for the constraint functions
     for c in con_models:
@@ -681,12 +623,6 @@ def updateFactors(a, damping, minimize=True):
             a['ahchat'][c][i] = damping * ahchatNew[j] + (1.0 - damping) * a['ahchat'][c][i]
             a['bhchat'][c][i] = damping * bhchatNew[j] + (1.0 - damping) * a['bhchat'][c][i]
 
-
-    # ***
-    # here we have slight deviation in the R code for some elments of Ahfhat and bhfhat
-    # that are zero in one and nonzero but small in the other. I am not sure yet if this
-    # is a bug or just a numerical difference in how things are computed...
-
     # We update the g factors
     # We obtain the cavities
     for j,c in enumerate(constraints):
@@ -799,21 +735,7 @@ def predictEP(obj_model, con_models, a, x_star, Xtest, minimize=True):
             ratio = np.exp(50) # cap ratio to avoid overflow issues
 
     # dlogZdmcOld = ratio / np.sqrt(vc)
-    d2logZdmcOld2 = -ratio * (alphac + ratio) / vc
-
-    # if -np.inf in d2logZdmcOld2:
-    #     pdb.set_trace()
-    #     obj_model.observed_inputs
-    #     obj_model.observed_values
-    #     obj_model.params['ls'].value
-    #     obj_model.params['amp2'].value
-
-    #     for con_model in con_models.values():
-    #         con_model.params['ls'].value
-    #         con_model.params['amp2'].value            
-
-        # raise Exception("d2logZdmcOld2 contains -inf. this will cause vcNew to be inf")
-
+    d2logZdmcOld2 = -ratio * (alphac + ratio) / vc # for numerical stability
     ahchatNew = -1.0 / (1.0 / d2logZdmcOld2 + vc)
     # bhchatNew = (mc + np.sqrt(vc) / (alphac + ratio)) * ahchatNew
     bhchatNew = -(mc / (1.0 / (-ratio * (alphac + ratio) / vc) + vc) + np.sqrt(vc) / (-vc / ratio + (alphac + ratio) * vc))
@@ -841,7 +763,7 @@ def predictEP(obj_model, con_models, a, x_star, Xtest, minimize=True):
         raise Exception("vfnew constrains nan")
 
     return {'mf':None, 'vf':vfNew, 'mc':None, 'vc':vcNew} 
-    # don't both computing mc since it's not used in the acquisition function
+    # don't bother computing mf and mc since they are not used in the acquisition function
     # m = mean, v = var, f = objective, c = constraint
 
 
@@ -877,7 +799,6 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
     else:
         raise Exception('This random feature sampling is for the squared exp or Matern5/2 kernels and you are using the %s' % gp.options['kernel'])
     b = npr.uniform(low=0, high=2*np.pi, size=nFeatures)[:,None]
-
 
     # Just for testing the  random features in W and b... doesn't test the weights theta
     if testing:
@@ -983,8 +904,7 @@ def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True)
     con_evals = np.ones(grid.shape[0]).astype('bool')
     for con_fun in funs['constraints']:
         con_evals = np.logical_and(con_evals, con_fun(grid, gradient=False)>=0)
-    # TODO-- deal with other stuff -- or make the binomial thing fit in somehow, this is becoming a mess...
-    # can we give it the latent values somehow... or something?
+
     if not np.any(con_evals):
         return None
 
@@ -996,9 +916,6 @@ def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True)
         best_guess_value = np.max(obj_evals[con_evals])
     x_initial = grid[con_evals][best_guess_index]
 
-    # print 'optimiszing'
-    # for reference info
-    # todo - use scipy optimizer as a backup
 
     fun_counter = defaultdict(int)
 
@@ -1110,8 +1027,6 @@ class PES(AbstractAcquisitionFunction):
 
         self.num_dims = num_dims
 
-        # self.verbose = verbose
-
         if grid is None:
             self.xstar_grid = sobol_grid.generate(num_dims, grid_size=GRID_SIZE)
         else:
@@ -1180,7 +1095,6 @@ class PES(AbstractAcquisitionFunction):
             return np.zeros(cand.shape[0])
 
         # use the EP solutions to compute the acquisition function 
-        # (in the R code, this is the function evaluateAcquisitionFunction, which calls predictEP)
         acq_dict = evaluate_acquisition_function_given_EP_solution(obj_model_dict, con_models_dict, cand, epSolution, x_star, minimize=minimize)
 
         # by default, sum the PESC contribution for all tasks
@@ -1226,16 +1140,7 @@ def evaluate_acquisition_function_given_EP_solution(obj_model_dict, con_models, 
     for j, c in enumerate(con_models):
         constrainedVariances[c] = predictionEP['vc'][:,j] + con_models[c].noise_value()
 
-    # if N_cand == 1:
-    #     print 'cand=%s,  x*+%s' % (cand, x_star)
-    #     print 'obj:%+g = %g - %g;  noise=%g' % (unconstrainedVariances[0,0]-constrainedVariances[0,0], unconstrainedVariances[0,0], constrainedVariances[0,0], obj_model.noise_value())
-    #     print 'co1:%+g = %g - %g;  noise=%g' % (unconstrainedVariances[0,1]-constrainedVariances[0,1], unconstrainedVariances[0,1], constrainedVariances[0,1], con_models.values()[0].noise_value())
-    #     print 'co2:%+g = %g - %g;  noise=%g' % (unconstrainedVariances[0,2]-constrainedVariances[0,2], unconstrainedVariances[0,2], constrainedVariances[0,2], con_models.values()[1].noise_value())
-    #     print 'conLHS:%+g' % np.sum(np.log(2 * np.pi * np.e * unconstrainedVariances[0,1:]))
-    #     print 'conRHS:%+g' % np.sum(np.log(2 * np.pi * np.e * constrainedVariances[0,1:]))
-
     # We only care about the variances because the means do not affect the entropy
-
     acq = dict()
     for t in unconstrainedVariances:
         acq[t] = 0.5 * np.log(2 * np.pi * np.e * unconstrainedVariances[t]) - \
