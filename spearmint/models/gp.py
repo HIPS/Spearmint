@@ -335,8 +335,8 @@ class GP(AbstractModel):
 
         # Build the component kernels
         # length_scale_prior = priors.Scale(priors.Beta(1.5, 5.0), 10.0)
-        # length_scale_prior = priors.Scale(priors.Beta(1.5, 7.0), 5.0) # smaller
-        length_scale_prior = priors.Scale(priors.Beta(0.5, 7.0), 5.0)   # even smaller
+        length_scale_prior = priors.Scale(priors.Beta(1.5, 7.0), 5.0) # smaller
+        # length_scale_prior = priors.Scale(priors.Beta(0.5, 7.0), 5.0)   # even smaller
         # length_scale_prior = None
 
         # set initial/default length scale value to be an array. we can't do this in advance

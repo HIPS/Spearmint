@@ -277,20 +277,17 @@ class Task(object):
         return self.numComplete(jobs) >= self.options['max_finished_jobs']
 
     def valid_normalized_values(self, input_space):
-        if self.options['likelihood'].lower() in ['binomial', 'step']:
-            # If binomial, don't standardize!
-            return self.valid_values # COUNTS
-        elif self.type == 'objective':
+        if self.type == 'objective':
             # If it's a regular objective
             values = self.valid_values
             values = self.standardize_mean(values)
             values = self.standardize_variance(values)
             return values
         elif self.type == 'constraint':
-            # If it's a constraint of continuous type, we can standardize
-            # the variance... but not the mean!!! because the value
-            # 0 has a special meaning here
-            return self.standardize_variance(self.valid_values)
+            # If it's a constraint we do not standardize
+            return self.valid_values
+        else:
+            raise Exception("Unknown task type: %s" % self.type)
 
 
     def valid_normalized_data_dict(self, input_space):
