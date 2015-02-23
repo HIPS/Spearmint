@@ -7,7 +7,7 @@ Spearmint is a software package to perform Bayesian optimization. The Software i
 Spearmint is under an **Academic and Non-Commercial Research Use License**.  Before using spearmint please be aware of the [license](LICENSE.md).  If you do not qualify to use spearmint you can ask to obtain a license as detailed in the [license](LICENSE.md) or you can use the older open source code version (which is somewhat outdated) at https://github.com/JasperSnoek/spearmint.  
 
 ## IMPORTANT: You are off the main branch!
-This is the PESC branch. This branch contains the Predictive Entropy Search with Constraints (PESC) acquisition function, described in a paper soon to be posted on arXiv. Note: using PESC <i>without</i> constraints results in a method that is similar (but not exactly equivalent) to Predictive Entropy Search (http://arxiv.org/abs/1406.2541). This branch also comes with a basic 2D plotting routine. 
+This is the PESC branch. This branch contains the Predictive Entropy Search with Constraints (PESC) acquisition function, described in the paper Predictive Entropy Search for Bayesian Optimization with Unknown Constraints (http://arxiv.org/abs/1502.05312). Note: using PESC <i>without</i> constraints results in a method that is similar (but not exactly equivalent) to Predictive Entropy Search (http://arxiv.org/abs/1406.2541). This branch also comes with a basic 2D plotting routine. 
 
 ####Relevant Publications
 
@@ -32,7 +32,11 @@ Spearmint implements a combination of the algorithms detailed in the following p
     Michael Gelbart, Jasper Snoek and Ryan Prescott Adams
     Uncertainty in Artificial Intelligence, 2014
 
-The PESC method used in this branch of Spearmint will appear on arXiv shortly; please check back soon.
+This branch also includes the method in 
+
+    Predictive Entropy Search for Bayesian Optimization with Unknown Constraints
+    José Miguel Hernández-Lobato, Michael A. Gelbart, Matthew W. Hoffman, Ryan P. Adams, Zoubin Ghahramani
+    arXiv: 1502.05312 [stat.ML], 2015.
 
 ### STEP 1: Installation
 1. Download/clone the spearmint code
