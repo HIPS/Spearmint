@@ -265,10 +265,7 @@ class Task(BaseTask):
             dd['values'] = self.standardize_mean(dd['values'])
             dd['values'] = self.standardize_variance(dd['values'])
         elif self.type == 'constraint':
-            # If it's a constraint of continuous type, we can standardize
-            # the variance... but not the mean!!! because the value
-            # 0 has a special meaning here
-            dd['values'] = self.standardize_variance(self.valid_values)
+            dd['values'] = self.valid_values
         else:
             raise Exception("unrecognized type!")
 
