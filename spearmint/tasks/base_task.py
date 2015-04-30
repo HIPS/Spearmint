@@ -254,6 +254,8 @@ class BaseTask(object):
 
             if param['type'] == 'float':
                 format_str = '%s%-12.12s  %-9.9s  %-12f\n'
+            elif param['type'] == 'enum':
+                format_str = '%s%-12.12s  %-9.9s  %-12s\n'
             else:
                 format_str = '%s%-12.12s  %-9.9s  %-12d\n'
 
