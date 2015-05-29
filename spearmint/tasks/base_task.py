@@ -350,11 +350,11 @@ class BaseTask(object):
             indices = variable['indices']
             if variable['type'] == 'int':
                 vals = U[:,indices]
-                assert(variable['max'] - variable['min'] > 0.0), 'Your specified min (%f) for the variable %s must be less than the max (%f)' % variable['min'], name, variable['max']
+                assert(variable['max'] - variable['min'] > 0.0), 'Your specified min (%f) for the variable %s must be less than the max (%f)' % (variable['min'], name, variable['max'])
                 V[:,indices] = self.unit_to_int(vals, variable['min'], variable['max'])
             elif variable['type'] == 'float':
                 vals = U[:,indices]
-                assert(variable['max'] - variable['min'] > 0.0), 'Your specified min (%f) for the variable %s must be less than the max (%f)' % variable['min'], name, variable['max']
+                assert(variable['max'] - variable['min'] > 0.0), 'Your specified min (%f) for the variable %s must be less than the max (%f)' % (variable['min'], name, variable['max'])
                 V[:,indices] = self.unit_to_float(vals, variable['min'], variable['max'])
             elif variable['type'] == 'enum':
                 for ind in indices:
