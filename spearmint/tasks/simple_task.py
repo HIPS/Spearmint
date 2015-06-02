@@ -187,7 +187,7 @@ import numpy as np
 
 from .base_task import BaseTask
 
-
+## Deprecated - Use Task and TaskGroup instead
 class SimpleTask(BaseTask):
     """
     A task is a dataset that contains utilities to map
