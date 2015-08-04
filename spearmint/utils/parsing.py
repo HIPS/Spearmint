@@ -263,8 +263,6 @@ DEFAULT_SCALE_DURATIONS  = False
 Parse the config and set defaults
 """
 def parse_config_file(config_file_dir, config_file_name, verbose=True):
-    
-
     try:
         with open(os.path.join(config_file_dir, config_file_name), 'r') as f:
             options = json.load(f, object_pairs_hook=OrderedDict) # important for the order of the transformations!
@@ -569,7 +567,9 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
     
     # Here is what I actually want: to be able to hash the inputs
 
-
+    # added because PESC is only for GPs
+    if 'nan-likelihood' not in options and options['acquisition'] == 'PES':
+        options['nan-likelihood'] = 'gaussian'
 
     # remove the old NaN task
     if 'NaN' in tasks:
@@ -585,7 +585,6 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
 
             nan_likelihood = options['nan-likelihood']
         else:
-            
             # First, see if all the tasks currently in this group are noiseless
             # If so, we should make the NaN task noiseless also
             # This is important because if a NaN constraint unnecessarily
@@ -645,15 +644,15 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
                         nan_task_options[opt_name] = opt
         nan_task_options['likelihood'] = nan_likelihood
         nan_task_options['type'] = 'constraint'
+        if nan_likelihood in ('step','binomial'):
+            nan_task_options['model'] = 'GPClassifier'
 
         nan_task = Task('NaN', nan_task_options, input_space.num_dims)
         nan_task.inputs  = nan_task_inputs
         nan_task.values  = nan_task_values
 
         if np.any(np.isnan(nan_task_inputs)) or np.any(np.isnan(nan_task_values)):
-            print 'aa'*100
-            import pdb
-            pdb.set_trace()
+            raise Exception("This should not happen.")
 
         options["tasks"]['NaN'] = nan_task_options
         tasks['NaN'] = nan_task

@@ -2,6 +2,7 @@
     "language"        : "PYTHON",
     "experiment-name" : "branin-distributed-example",
     "polling_time"    : 1,
+    "acquisition"     : "PES",
     "resources" : {
         "my-machine" : {
             "scheduler"         : "local",

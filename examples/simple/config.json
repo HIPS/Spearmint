@@ -3,6 +3,7 @@
     "main_file"       : "branin.py",
     "experiment-name" : "simple-braninhoo-example",
     "likelihood"      : "NOISELESS",
+    "acquisition"     : "PES",
     "variables" : {
         "x" : {
             "type" : "FLOAT",

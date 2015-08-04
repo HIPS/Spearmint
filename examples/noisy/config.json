@@ -3,6 +3,7 @@
     "main_file"       : "branin_noisy.py",
     "experiment-name" : "braninhoo_noisy",
     "likelihood"      : "GAUSSIAN",
+    "acquisition"     : "PES",
     "variables" : {
         "x" : {
             "type" : "FLOAT",
