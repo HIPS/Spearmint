@@ -1047,8 +1047,8 @@ class PES(AbstractAcquisitionFunction):
         models = [obj_model] + list(con_models_dict.values())
 
         for model in models:
-            if model.pending is not None:
-                raise NotImplementedError("PES not implemented for pending stuff? Not sure. Should just impute the mean...")
+            # if model.pending is not None:
+            #     raise NotImplementedError("PES not implemented for pending stuff? Not sure. Should just impute the mean...")
 
             if not model.options['caching']:
                 logging.error("Warning: caching is off while using PES!")
