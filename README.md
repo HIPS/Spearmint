@@ -39,7 +39,7 @@ Spearmint implements a combination of the algorithms detailed in the following p
 5. Install the pymongo package using e.g., pip `pip install pymongo` or anaconda `conda install pymongo`  
 
 **STEP 2: Setting up your experiment**  
-1. Create a callable objective function. See ../examples/branin/branin.py as an example  
+1. Create a callable objective function. See `./examples/simple/branin.py` as an example  
 2. Create a config file. There are 3 example config files in the ../examples directory. Note 1: There are more parameters that can be set in the config files than what is shown in the examples, but these parameters all have default values. Note 2: By default Spearmint assumes your function is noisy (non-deterministic). If it is noise-free, you should set this explicitly as in the ../examples/simple/config.json file.
 
 **STEP 3: Running spearmint**  
