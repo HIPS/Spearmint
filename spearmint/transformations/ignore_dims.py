@@ -209,7 +209,12 @@ class IgnoreDims(AbstractTransformation):
 
     def backward_pass(self, V):
         JV = V.copy()
-        JV[:,self.ign] = 0.0
+
+	if JV.ndim == 1:
+	        JV[self.ign] = 0.0
+	else:
+#	        JV[:,self.ign] = 0.0
+	        JV[...,self.ign] = 0.0
 
         return JV
 

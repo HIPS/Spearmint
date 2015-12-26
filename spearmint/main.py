@@ -212,6 +212,7 @@ from spearmint.utils.parsing          import repeat_experiment_name
 from spearmint.utils.parsing          import repeat_output_dir
 from spearmint.resources.resource     import print_resources_status
 from spearmint.tasks.task             import print_tasks_status
+from random import seed
 
 
 logLevel = logging.INFO
@@ -219,8 +220,10 @@ logFormatter = logging.Formatter("%(message)s")
 logging.basicConfig(level=logLevel,
                     format="%(message)s")
 
+DEFAULT_MAX_ITERATIONS = 200
 
 def main():
+
     parser = optparse.OptionParser(usage="usage: %prog [options] directory")
 
     parser.add_option("--config", dest="config_file",
@@ -273,11 +276,26 @@ def main():
 
     # Load up the chooser.
     chooser_module = importlib.import_module('spearmint.choosers.' + options['chooser'])
+
     chooser = chooser_module.init(input_space, options)
 
     # Connect to the database
+
     db_address = options['database']['address']
     db         = MongoDB(database_address=db_address)
+
+    if os.getenv('SPEARMINT_MAX_ITERATIONS') == None and 'max_iterations' not in set(options.keys()):
+	maxiterations = DEFAULT_MAX_ITERATIONS
+    elif os.getenv('SPEARMINT_MAX_ITERATIONS') != None:
+	maxiterations = int(os.getenv('SPEARMINT_MAX_ITERATIONS'))
+    else:
+	maxiterations = options['max_iterations']
+
+    # Set random seed
+
+    if 'random_seed' in options.keys():
+	    np.random.seed(int(options['random_seed']))
+	    seed(int(options['random_seed']))
 
     waiting_for_results = False  # for printing purposes only
     while True:
@@ -325,8 +343,9 @@ def main():
                 # "Fit" the chooser - give the chooser data and let it fit the model(s).
                 # NOTE: even if we are only suggesting for 1 task, we need to fit all of them
                 # because the acquisition function for one task depends on all the tasks
+
                 hypers = chooser.fit(tasks, hypers)
-                
+
                 if hypers:
                     logging.debug('GP covariance hyperparameters:')
                 print_hypers(hypers)
@@ -336,10 +355,13 @@ def main():
                     db.save(hypers, experiment_name, 'hypers')
 
                 # Compute the best value so far, a.k.a. the "recommendation"
+
                 recommendation = chooser.best()
 
                 # Save the recommendation in the DB
+
                 numComplete_by_task = {task_name : task.numComplete(jobs) for task_name, task in tasks.iteritems()}
+
                 db.save({'num_complete' : resource.numComplete(jobs),
                      'num_complete_tasks' : numComplete_by_task,
                      'params'   : input_space.paramify(recommendation['model_model_input']), 
@@ -356,6 +378,7 @@ def main():
                 logging.info('\nGetting suggestion for %s...\n' % (', '.join(task_couplings.keys())))
 
                 # Get the next suggested experiment from the chooser.
+
                 suggested_input, suggested_tasks = chooser.suggest(task_couplings, optim_start_time)
                 suggested_task = suggested_tasks[0] # hack, deal with later
 

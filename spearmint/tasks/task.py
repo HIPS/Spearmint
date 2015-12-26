@@ -196,6 +196,7 @@ class Task(object):
     """
     
     def __init__(self, task_name, task_options, num_dims):
+
         self.name       = task_name
         self.type       = task_options['type'].lower()
         self.options    = task_options # There may be many options here, like constraint
@@ -206,6 +207,7 @@ class Task(object):
         self._pending = np.zeros((0, num_dims))
         self._values  = np.array([])
         self._costs   = np.array([])
+	self.num_dims = num_dims
         
         self.durations = np.array([])
 

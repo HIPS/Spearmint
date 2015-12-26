@@ -708,7 +708,7 @@ class GP(AbstractModel):
         fants = np.zeros((pred.shape[0], n_samples))
         for i in xrange(n_samples):
             for param in self.params:
-                param.sample_from_prior() # sample from hyperpriors and set value
+                self.params[ param ].sample_from_prior() # sample from hyperpriors and set value
             fants[:,i] = self.sample_from_prior_given_hypers(pred, joint)
         return fants.squeeze() # squeeze in case n_samples=1
 

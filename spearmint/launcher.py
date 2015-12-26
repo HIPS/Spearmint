@@ -270,8 +270,11 @@ def launch(db_address, experiment_name, job_id):
 
         # actually it's ok if the result dict contains extra stuff. so it would be fine just to
         # check that all((t in result for t in job['tasks']))
-        if set(result.keys()) != set(job['tasks']):
-            if set(result.keys()).union(['NaN']) != set(job['tasks']):
+
+#        if set(result.keys()) != set(job['tasks']):
+        if not set(job['tasks']).issubset(set(result.keys())):
+#            if set(result.keys()).union(['NaN']) != set(job['tasks']):
+            if  not set(job['tasks']).issubset(set(result.keys()).union(['NaN'])):
                 raise Exception("Result task names %s did not match job task names %s." % (result.keys(), job['tasks']))
 
         success = True
@@ -323,6 +326,7 @@ def python_launcher(job):
     sys.stderr.write('Importing %s.py\n' % main_file)
     module  = __import__(main_file)
     sys.stderr.write('Running %s.main()\n' % main_file)
+    
     result = module.main(job['id'], params)
 
     # Change back out.

@@ -183,237 +183,230 @@
 # its Institution.
 
 import numpy          as np
+import numpy.random   as npr
 import scipy.stats    as sps
+import scipy.linalg   as spla
+import numpy.linalg   as npla
+import scipy.optimize as spo
+import copy
+import traceback
+import warnings
+import sys
+
+from collections import defaultdict
+from spearmint.grids import sobol_grid
 from spearmint.acquisition_functions.abstract_acquisition_function import AbstractAcquisitionFunction
-from spearmint.acquisition_functions.constraints_helper_functions import total_constraint_confidence
+from spearmint.utils.numerics import logcdf_robust
+from spearmint.models.gp import GP
+from spearmint.utils.moop            import MOOP_basis_functions
+from spearmint.utils.moop            import _cull_algorithm
+import importlib
+from spearmint.tasks.task         import Task
 
-def compute_ei(model, pred, ei_target=None, compute_grad=True):
-    if model.pending:
-        return compute_ei_pending(model, pred, ei_target, compute_grad)
+from spearmint.models.abstract_model import function_over_hypers
+import logging
 
-    if pred.ndim == 1:
-        pred = pred[None,:]
+try:
+    import nlopt
+except:
+    nlopt_imported = False
+else:
+    nlopt_imported = True
+# see http://ab-initio.mit.edu/wiki/index.php/NLopt_Python_Reference
 
-    if not compute_grad:
-        mean, var = model.predict(pred)
-    else:
-        mean, var, grad_mean_x, grad_var_x = model.predict(pred, compute_grad=True)
 
-    # Expected improvement
-    sigma  = np.sqrt(var)
-    z      = (ei_target - mean) / sigma
-    ncdf   = sps.norm.cdf(z)
-    npdf   = sps.norm.pdf(z)
-    ei     = (ei_target - mean) * ncdf + sigma * npdf
+# Compute log of the normal CDF of x in a robust way
+# Based on the fact that log(cdf(x)) = log(1-cdf(-x))
+# and log(1-z) ~ -z when z is small, so  this is approximately
+# -cdf(-x), which is just the same as -sf(x) in scipy
 
-    if not compute_grad:
-        return ei
-
-    # ei = np.sum(ei)
-
-    # Gradients of ei w.r.t. mean and variance            
-    g_ei_m = -ncdf
-    g_ei_s2 = 0.5*npdf / sigma
+def logcdf_robust(x):
     
-    # Gradient of ei w.r.t. the inputs
-    grad_ei_x = grad_mean_x*g_ei_m + grad_var_x*g_ei_s2
-
-    return ei, grad_ei_x
-
-def compute_ei_pending(model, pred, ei_target=None, compute_grad=True):
-    # TODO: use ei_target!!
-    if pred.ndim == 1:
-        pred = pred[None,:]
-
-    if not compute_grad:
-        func_m, func_v = model.predict(pred)
+    if isinstance(x, np.ndarray):
+        ret = sps.norm.logcdf(x)
+        ret[x > 5] = -sps.norm.sf(x[x > 5])
+    elif x > 5:
+        ret = -sps.norm.sf(x)
     else:
-        (func_m,
-        func_v,
-        grad_xp_m,
-        grad_xp_v) = model.predict(pred, compute_grad=True)
+        ret = sps.norm.logcdf(x)
 
-    if func_m.ndim == 1:
-        func_m = func_m[:,np.newaxis]
-    if func_v.ndim == 1:
-        func_v = func_v[:,np.newaxis]
+    return ret
 
-    if compute_grad:
-        if grad_xp_m.ndim == 2:
-            grad_xp_m = grad_xp_m[:,:,np.newaxis]
-        if grad_xp_v.ndim == 2:
-            grad_xp_v = grad_xp_v[:,:,np.newaxis]
+"""
+FOR GP MODELS ONLY
+"""
 
-    ei_values = model.values.min(axis=0)
+class ParEGO(AbstractAcquisitionFunction):
 
-    ei_values = np.array(ei_values)
-    if ei_values.ndim == 0:
-        ei_values = np.array([[ei_values]])
+	def __init__(self, num_dims, verbose=True, input_space=None, grid=None, opt = None):
 
-    # Expected improvement
-    func_s = np.sqrt(func_v)
-    u      = (ei_values - func_m) / func_s
-    ncdf   = sps.norm.cdf(u)
-    npdf   = sps.norm.pdf(u)
-    ei     = np.mean(func_s*( u*ncdf + npdf),axis=1)
+		# we want to cache these. we use a dict indexed by the state integer
 
-    if not compute_grad:
-        return ei
+		self.cached_scalarization = dict()
+		self.cached_tasks = dict()
+		self.has_gradients = False
+		self.num_dims = num_dims
+		self.input_space = input_space
+	        self.weight_vector = None
+		self.hypers = None
+		self.recommendation = None
+		self.acq = None
 
-    ei = np.sum(ei)
+		# Load up the chooser used for expected improvement computation.
 
-    # Gradients of ei w.r.t. mean and variance            
-    g_ei_m = -ncdf
-    g_ei_s2 = 0.5*npdf / func_s
-    
-    # Gradient of ei w.r.t. the inputs
-    grad_xp = (grad_xp_m*np.tile(g_ei_m,(pred.shape[1],1))).T + (grad_xp_v.T*g_ei_s2).T
-    grad_xp = np.mean(grad_xp,axis=0)
+		chooser_module = importlib.import_module('spearmint.choosers.default_chooser')
 
-    return ei, grad_xp.flatten()
+		# We use the default options for the chooser
 
+		options = dict()
 
-def constraint_weighted_ei(obj_model, constraint_models, cand, current_best, compute_grad):
+		options['acquisition'] = 'ExpectedImprovement'
+		options['tolerance'] = None
+		options['always_sample'] = True
+		options['grid_subset'] = 1
+		options['grid_seed'] = 0
+		options['opt_acq_maxeval'] = 500
+		options['optimize_acq'] = True
+		options['num_spray'] = 10
+		options['regenerate_grid'] = True
+		options['check_grad'] = False
+		options['spray_std'] = 0.0001
+		options['scale-duration'] = False
+		options['optimize_best'] = True
+		options['unit_tolerance'] = 0.0001
 
-    numConstraints = len(constraint_models)
+		self.chooser = chooser_module.init(input_space, options)
 
-    if cand.ndim == 1:
-        cand = cand[None]
+	def acquisition(self, obj_model_dict, con_models_dict, cand, current_best, compute_grad, minimize=True, tasks=None):
 
-    N_cand = cand.shape[0]
+		obj_models = obj_model_dict.values()
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############   Part that depends on the objective     ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
-    if current_best is None:
-        ei = 1.
-        ei_grad = 0.
-    else:
-        target = current_best
- 
-        # Compute the predictive mean and variance
-        if not compute_grad:
-            ei = compute_ei(obj_model, cand, target, compute_grad=compute_grad)
-        else:
-            ei, ei_grad = compute_ei(obj_model, cand, target, compute_grad=compute_grad)
+		models = obj_models
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############  Part that depends on the constraints    ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
-    # Compute p(valid) for ALL constraints
-    if not compute_grad:
-        p_valid_prod = total_constraint_confidence(constraint_models, cand, compute_grad=False)
-    else:
-        p_valid_prod, p_grad_prod = total_constraint_confidence(constraint_models, cand, compute_grad=True)
+		# make sure all models are at the same state
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############    Combine the two parts (obj and con)   ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
+		assert len({model.state for model in models}) == 1, "Models are not all at the same state"
 
-    acq = ei * p_valid_prod
+		assert not compute_grad 
 
-    if not compute_grad:
-        return acq
-    else:
-        return acq, ei_grad * p_valid_prod + p_grad_prod * ei
+		# We check if we have already computed the scalarization (for a particular number of observations in each model). 
+		# If so, we reuse the result obtained.
 
+		key = tuple([obj_model_dict[ obj ].inputs.shape[0] for obj in obj_model_dict])
 
-def ei_evaluate_constraint_only(obj_model, constraint_models, cand, current_best, compute_grad):
+		if not key in self.cached_scalarization:
 
-    improvement = lambda mean: np.maximum(0.0, current_best-mean)
-    improvement_grad = lambda mean_grad: -mean_grad*np.less(mean, current_best).flatten()
+	        	self.weight_vector = np.random.dirichlet(np.ones(len(obj_model_dict)), 1)
+			scalarization = self.scalarization(obj_model_dict, tasks)
+			self.cached_scalarization[ key ] = scalarization
+			self.hypers = self.chooser.fit(scalarization[ 'tasks' ], self.hypers)
+			recommendation = self.chooser.best()
+                        self.current_best_value = (recommendation['model_model_value'] - self.chooser.objective.standardization_mean) / \
+				self.chooser.objective.standardization_variance
+        		self.acq = self.chooser.acquisition_function(self.num_dims, grid = None, input_space = self.input_space)
 
-    # If unconstrained, just compute the GP mean
-    if len(constraint_models) == 0:
-        if compute_grad:
-            mean, var, grad_mean_x, grad_var_x = obj_model.predict(cand, compute_grad=True)
-            return improvement(mean), improvement_grad(grad_mean_x)
-        else:
-            mean, var = obj_model.predict(cand, compute_grad=False)
-            return improvement(mean)
+#			print_images(self.chooser, recommendation['model_model_value'])
 
-    if cand.ndim == 1:
-        cand = cand[None]
+		# We use the chooser to compute the expected improvement on the scalarized task
 
-    N_cand = cand.shape[0]
+		return  function_over_hypers(self.chooser.models.values(), self.acq.acquisition, \
+			self.chooser.objective_model_dict, self.chooser.constraint_models_dict, \
+			cand, self.current_best_value, compute_grad = False, tasks = self.chooser.tasks)
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############   Part that depends on the objective     ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
-    if current_best is None:
-        ei = 1.
-        ei_grad = 0.
-    else:
-        target = current_best
+	# This computes the model for the scalarization
 
-        # Compute the predictive mean and variance
-        if not compute_grad:
-            mean, var = obj_model.predict(cand, compute_grad=False)
-        else:
-            mean, var, grad_mean_x, grad_var_x = obj_model.predict(cand, compute_grad=True)
-            ei_grad = improvement_grad(grad_mean_x)
-        ei = improvement(mean)
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############  Part that depends on the constraints    ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
-    # Compute p(valid) for ALL constraints
-    if not compute_grad:
-        p_valid_prod = total_constraint_confidence(constraint_models, cand, compute_grad=False)
-    else:
-        p_valid_prod, p_grad_prod = total_constraint_confidence(constraint_models, cand, compute_grad=True)
+	def scalarization(self, obj_model_dict, tasks):
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############    Combine the two parts (obj and con)   ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
+		# We assume the same observations for all the objectives
 
-    acq = ei * p_valid_prod
+		inputs = copy.deepcopy(self.input_space.from_unit(obj_model_dict[ obj_model_dict.keys()[ 0 ] ].inputs))
+		values = None
+		
 
-    if not compute_grad:
-        return acq
-    else:
-        return acq, ei_grad * p_valid_prod + p_grad_prod * ei
+		for objective in obj_model_dict:
+			if values == None:
+				values = np.array([ obj_model_dict[ objective ].values ]).T
+			else:
+				values = np.hstack((values, np.array([obj_model_dict[ objective ].values]).T))
+
+		new_values = np.zeros(inputs.shape[ 0 ])
+
+		for i in range(inputs.shape[ 0 ]):
+			new_values[ i ] = np.max(self.weight_vector * values[ i, : ]) +  0.05 * np.sum(self.weight_vector * values[ i, : ])
+
+		# We look for noisy observations. If one task is noisy we consider a noisy model
+
+		noisy = False
+		options = dict()
+
+		for t in obj_model_dict:
+			if obj_model_dict[ t ].options['likelihood'].lower() != 'noiseless':
+				noisy = True
+				break
+
+		# We set the options for the task to be built
+
+		if noisy == True:
+			options['likelihood'] = 'GAUSSIAN'
+		else:
+			options['likelihood'] = 'NOISELESS'
+
+		options['acquisition'] = 'ExpectedImprovement'
+		options['main_file'] = None
+		options['language'] = None
+		options['type'] = 'OBJECTIVE'
+		options['group'] = 0
+		options['cost'] = 1.0
+		options['experiment-name'] = None
+		options['config'] = None
+		options["fit_mean"] = False
+		options['model'] = 'GP'
+		options['max_finished_jobs'] = None
+		options['scale-duration'] = False
+		options['main_file_path'] = None
+		trans = [ dict() ]
+		trans[ 0 ]['BetaWarp'] = dict()
+		options['transformations'] = []
+
+		scalarization = dict()
+
+		# We create the corresponding task that corresponds to the scalarized objective
+
+		task = Task('ParEGO', options, inputs.shape[ 1 ])
+		task.inputs = inputs
+		task.values = new_values
+
+		tasks = dict()
+		tasks[ task.name ] = task
+		
+		scalarization['tasks'] = tasks
+
+		return scalarization
 
 
+def print_images(chooser, current_best_value_unormalized):
+
+	import matplotlib.pyplot as plt
+        spacing = np.linspace(0,1,1000)[:,None]
+
+	inputs = chooser.input_space.from_unit(chooser.models['ParEGO'].inputs)
+	values = chooser.tasks[ 'ParEGO' ].unstandardize_mean(chooser.tasks[ 'ParEGO' ].unstandardize_variance(\
+		chooser.models[ 'ParEGO'].values))
+
+	mean, var = chooser.models[ 'ParEGO' ].function_over_hypers(chooser.models[ 'ParEGO' ].predict, spacing)
+	mean = chooser.tasks[ 'ParEGO' ].unstandardize_mean(chooser.tasks[ 'ParEGO' ].unstandardize_variance(mean))
+	var = chooser.tasks[ 'ParEGO' ].unstandardize_variance(var)
+
+	current_best_value = current_best_value_unormalized
+
+	fig = plt.figure()
+	plt.plot(inputs, values, color='black', marker='x', markersize=10, linestyle='None')
+	plt.plot(chooser.input_space.from_unit(spacing), mean, color = 'black', marker = '.')
+	plt.plot(chooser.input_space.from_unit(spacing), current_best_value * np.ones(1000), color = 'red', marker = '.')
+	plt.plot(chooser.input_space.from_unit(spacing), mean - np.sqrt(var), color = 'black', marker = '.', markersize = 1)
+	plt.plot(chooser.input_space.from_unit(spacing), mean + np.sqrt(var), color = 'black', marker = '.', markersize = 1)
+	plt.savefig('./figures/' + str(inputs.shape[ 0 ]) + '-scalarization.pdf', format='pdf', dpi=1000)
+	plt.close(fig)
 
 
-class ExpectedImprovement(AbstractAcquisitionFunction):
-    """ This is regular expected improvement when there are no constraints,
-        and the constraint-weighted EI when there are constraints. """
-    def acquisition(self, objective_model_dict, constraint_models_dict, cand, current_best, compute_grad, tasks=None):
-        if tasks is not None and set(tasks) != set(objective_model_dict.keys()).union(set(constraint_models_dict.keys())):
-            print tasks
-            print objective_model_dict.keys()
-            print constraint_models_dict.keys()
-            raise Exception("ExpectedImprovement does not have competitive decouplings implemented") 
 
-        objective_model = objective_model_dict.values()[0]
-        if len(constraint_models_dict) == 0:
-            return compute_ei(objective_model, cand, 
-                ei_target=current_best, compute_grad=compute_grad)
-        else:
-            return constraint_weighted_ei(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)
-
-
-class ConstraintAndMean(AbstractAcquisitionFunction):
-    """  This class is not useful in most contexts. I suggest never using it.
- It computes real the expected improvement assuming you only evaluate the constraints
- Probability of satisfying the constraints multiplied
- by the objective GP mean "improvement", 
- max(0,best-mean)
- rather than EI. the problem with it is that it 
- suffers from the chicken and egg pathology for decoupled constraints.
- It's good if the objective is known and the constraint is unknown  """
-    def acquisition(self, objective_model, constraint_models_dict, cand, current_best, compute_grad):
-        return ei_evaluate_constraint_only(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)

@@ -1,6 +1,6 @@
 Contributors
 ------------
-We have verified that the following individuals have have submitted 
+We have verified that the following individuals have submitted 
 Contributor License Agreements.
 
 [ivoanastacio](https://github.com/HIPS/Spearmint/pull/4)  

@@ -183,237 +183,247 @@
 # its Institution.
 
 import numpy          as np
+import numpy.random   as npr
 import scipy.stats    as sps
+import scipy.linalg   as spla
+import numpy.linalg   as npla
+import scipy.optimize as spo
+import copy
+import traceback
+import warnings
+import sys
+
+from spearmint.grids import sobol_grid
+from spearmint.utils.moop            import MOOP
+from collections import defaultdict
+from spearmint.grids import sobol_grid
 from spearmint.acquisition_functions.abstract_acquisition_function import AbstractAcquisitionFunction
-from spearmint.acquisition_functions.constraints_helper_functions import total_constraint_confidence
+from spearmint.utils.numerics import logcdf_robust
+from spearmint.models.gp import GP
+from spearmint.utils.moop            import MOOP_basis_functions
+from spearmint.utils.moop            import _cull_algorithm
+import importlib
+from spearmint.tasks.task         import Task
+from spearmint.utils.hv import HyperVolume
+from scipy.spatial.distance import cdist
 
-def compute_ei(model, pred, ei_target=None, compute_grad=True):
-    if model.pending:
-        return compute_ei_pending(model, pred, ei_target, compute_grad)
+from spearmint.models.abstract_model import function_over_hypers
+import logging
 
-    if pred.ndim == 1:
-        pred = pred[None,:]
+NUM_POINTS_FRONTIER = 10
+USE_GRID_ONLY = False
+GRID_SIZE = 1000
+NSGA_POP = 100
+NSGA_EPOCHS = 100
 
-    if not compute_grad:
-        mean, var = model.predict(pred)
-    else:
-        mean, var, grad_mean_x, grad_var_x = model.predict(pred, compute_grad=True)
-
-    # Expected improvement
-    sigma  = np.sqrt(var)
-    z      = (ei_target - mean) / sigma
-    ncdf   = sps.norm.cdf(z)
-    npdf   = sps.norm.pdf(z)
-    ei     = (ei_target - mean) * ncdf + sigma * npdf
-
-    if not compute_grad:
-        return ei
-
-    # ei = np.sum(ei)
-
-    # Gradients of ei w.r.t. mean and variance            
-    g_ei_m = -ncdf
-    g_ei_s2 = 0.5*npdf / sigma
-    
-    # Gradient of ei w.r.t. the inputs
-    grad_ei_x = grad_mean_x*g_ei_m + grad_var_x*g_ei_s2
-
-    return ei, grad_ei_x
-
-def compute_ei_pending(model, pred, ei_target=None, compute_grad=True):
-    # TODO: use ei_target!!
-    if pred.ndim == 1:
-        pred = pred[None,:]
-
-    if not compute_grad:
-        func_m, func_v = model.predict(pred)
-    else:
-        (func_m,
-        func_v,
-        grad_xp_m,
-        grad_xp_v) = model.predict(pred, compute_grad=True)
-
-    if func_m.ndim == 1:
-        func_m = func_m[:,np.newaxis]
-    if func_v.ndim == 1:
-        func_v = func_v[:,np.newaxis]
-
-    if compute_grad:
-        if grad_xp_m.ndim == 2:
-            grad_xp_m = grad_xp_m[:,:,np.newaxis]
-        if grad_xp_v.ndim == 2:
-            grad_xp_v = grad_xp_v[:,:,np.newaxis]
-
-    ei_values = model.values.min(axis=0)
-
-    ei_values = np.array(ei_values)
-    if ei_values.ndim == 0:
-        ei_values = np.array([[ei_values]])
-
-    # Expected improvement
-    func_s = np.sqrt(func_v)
-    u      = (ei_values - func_m) / func_s
-    ncdf   = sps.norm.cdf(u)
-    npdf   = sps.norm.pdf(u)
-    ei     = np.mean(func_s*( u*ncdf + npdf),axis=1)
-
-    if not compute_grad:
-        return ei
-
-    ei = np.sum(ei)
-
-    # Gradients of ei w.r.t. mean and variance            
-    g_ei_m = -ncdf
-    g_ei_s2 = 0.5*npdf / func_s
-    
-    # Gradient of ei w.r.t. the inputs
-    grad_xp = (grad_xp_m*np.tile(g_ei_m,(pred.shape[1],1))).T + (grad_xp_v.T*g_ei_s2).T
-    grad_xp = np.mean(grad_xp,axis=0)
-
-    return ei, grad_xp.flatten()
+SMSEGO_OPTION_DEFAULTS  = {
+    'smsego_pareto_set_size'      : 10,
+    'smsego_grid_size'      : 1000,
+    'smsego_nsga_epochs'      : 100,
+    'smsego_nsga_pop'      : 100,
+    'smsego_use_grid_only_to_solve_problem' : False,
+    }
 
 
-def constraint_weighted_ei(obj_model, constraint_models, cand, current_best, compute_grad):
+epsilon = 1e-6 			# Based on the implementation of the R package GPareto
 
-    numConstraints = len(constraint_models)
+class SMSego(AbstractAcquisitionFunction):
 
-    if cand.ndim == 1:
-        cand = cand[None]
+	def __init__(self, num_dims, verbose=True, input_space=None, grid=None, opt = None):
 
-    N_cand = cand.shape[0]
+		global USE_GRID_ONLY
+		global NUM_POINTS_FRONTIER
+		global NSGA_EPOCHS
+		global NSGA_POP
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############   Part that depends on the objective     ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
-    if current_best is None:
-        ei = 1.
-        ei_grad = 0.
-    else:
-        target = current_best
- 
-        # Compute the predictive mean and variance
-        if not compute_grad:
-            ei = compute_ei(obj_model, cand, target, compute_grad=compute_grad)
-        else:
-            ei, ei_grad = compute_ei(obj_model, cand, target, compute_grad=compute_grad)
+		# we want to cache these. we use a dict indexed by the state integer
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############  Part that depends on the constraints    ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
-    # Compute p(valid) for ALL constraints
-    if not compute_grad:
-        p_valid_prod = total_constraint_confidence(constraint_models, cand, compute_grad=False)
-    else:
-        p_valid_prod, p_grad_prod = total_constraint_confidence(constraint_models, cand, compute_grad=True)
+		self.cached_information = dict()
+		self.has_gradients = False
+		self.num_dims = num_dims
+		self.input_space = input_space
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############    Combine the two parts (obj and con)   ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
+		self.options = SMSEGO_OPTION_DEFAULTS.copy()
+		self.options.update(opt)
 
-    acq = ei * p_valid_prod
+		NUM_POINTS_FRONTIER = self.options['smsego_pareto_set_size']
+		GRID_SIZE = self.options['smsego_grid_size'] 
+		USE_GRID_ONLY = self.options['smsego_use_grid_only_to_solve_problem'] 
+		NSGA_POP = self.options['smsego_nsga_pop'] 
+		NSGA_EPOCHS = self.options['smsego_nsga_epochs'] 
 
-    if not compute_grad:
-        return acq
-    else:
-        return acq, ei_grad * p_valid_prod + p_grad_prod * ei
+	def acquisition(self, obj_model_dict, con_models_dict, cand, current_best, compute_grad, minimize=True, tasks=None):
 
+		models = obj_model_dict.values()
 
-def ei_evaluate_constraint_only(obj_model, constraint_models, cand, current_best, compute_grad):
+		# make sure all models are at the same state
 
-    improvement = lambda mean: np.maximum(0.0, current_best-mean)
-    improvement_grad = lambda mean_grad: -mean_grad*np.less(mean, current_best).flatten()
+		assert len({model.state for model in models}) == 1, "Models are not all at the same state"
 
-    # If unconstrained, just compute the GP mean
-    if len(constraint_models) == 0:
-        if compute_grad:
-            mean, var, grad_mean_x, grad_var_x = obj_model.predict(cand, compute_grad=True)
-            return improvement(mean), improvement_grad(grad_mean_x)
-        else:
-            mean, var = obj_model.predict(cand, compute_grad=False)
-            return improvement(mean)
+		assert not compute_grad 
 
-    if cand.ndim == 1:
-        cand = cand[None]
+		# We check if we have already computed the information associated to the model and other stuff
 
-    N_cand = cand.shape[0]
+		key = tuple([ obj_model_dict[ obj ].state for obj in obj_model_dict ])
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############   Part that depends on the objective     ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
-    if current_best is None:
-        ei = 1.
-        ei_grad = 0.
-    else:
-        target = current_best
+		if not key in self.cached_information:
+			self.cached_information[ key ] = self.compute_information(obj_model_dict)
 
-        # Compute the predictive mean and variance
-        if not compute_grad:
-            mean, var = obj_model.predict(cand, compute_grad=False)
-        else:
-            mean, var, grad_mean_x, grad_var_x = obj_model.predict(cand, compute_grad=True)
-            ei_grad = improvement_grad(grad_mean_x)
-        ei = improvement(mean)
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############  Part that depends on the constraints    ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
-    # Compute p(valid) for ALL constraints
-    if not compute_grad:
-        p_valid_prod = total_constraint_confidence(constraint_models, cand, compute_grad=False)
-    else:
-        p_valid_prod, p_grad_prod = total_constraint_confidence(constraint_models, cand, compute_grad=True)
+		# We use the chooser to compute the expected improvement on the scalarized task
 
-    ############## ---------------------------------------- ############
-    ##############                                          ############
-    ##############    Combine the two parts (obj and con)   ############
-    ##############                                          ############
-    ############## ---------------------------------------- ############
+		return self.compute_acquisition(cand, obj_model_dict, self.cached_information[ key ])
 
-    acq = ei * p_valid_prod
+	# We compute the required information for carrying out the method
 
-    if not compute_grad:
-        return acq
-    else:
-        return acq, ei_grad * p_valid_prod + p_grad_prod * ei
+	def compute_information(self, obj_model_dict):
 
+		cached_information = dict()
 
+		# First we obtain a sample from the Pareto Frontier of NUM_POINTS_FRONTIER
 
+		moop = MOOP(obj_model_dict, obj_model_dict, self.input_space, False)
+		
+		grid = sobol_grid.generate(self.input_space.num_dims, self.input_space.num_dims * GRID_SIZE)
 
-class ExpectedImprovement(AbstractAcquisitionFunction):
-    """ This is regular expected improvement when there are no constraints,
-        and the constraint-weighted EI when there are constraints. """
-    def acquisition(self, objective_model_dict, constraint_models_dict, cand, current_best, compute_grad, tasks=None):
-        if tasks is not None and set(tasks) != set(objective_model_dict.keys()).union(set(constraint_models_dict.keys())):
-            print tasks
-            print objective_model_dict.keys()
-            print constraint_models_dict.keys()
-            raise Exception("ExpectedImprovement does not have competitive decouplings implemented") 
+		if USE_GRID_ONLY == True:
 
-        objective_model = objective_model_dict.values()[0]
-        if len(constraint_models_dict) == 0:
-            return compute_ei(objective_model, cand, 
-                ei_target=current_best, compute_grad=compute_grad)
-        else:
-            return constraint_weighted_ei(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)
+			moop.solve_using_grid(grid)
 
+			for i in range(len(obj_model_dict.keys())):
+				result = self.find_optimum_gp(obj_model_dict[ obj_model_dict.keys()[ i ] ], grid)
+				moop.append_to_population(result)
 
-class ConstraintAndMean(AbstractAcquisitionFunction):
-    """  This class is not useful in most contexts. I suggest never using it.
- It computes real the expected improvement assuming you only evaluate the constraints
- Probability of satisfying the constraints multiplied
- by the objective GP mean "improvement", 
- max(0,best-mean)
- rather than EI. the problem with it is that it 
- suffers from the chicken and egg pathology for decoupled constraints.
- It's good if the objective is known and the constraint is unknown  """
-    def acquisition(self, objective_model, constraint_models_dict, cand, current_best, compute_grad):
-        return ei_evaluate_constraint_only(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)
+		else:
+
+			assert NSGA_POP > len(obj_model_dict.keys()) + 1
+
+			moop.solve_using_grid(grid)
+
+			for i in range(len(obj_model_dict.keys())):
+				result = self.find_optimum_gp(obj_model_dict[ obj_model_dict.keys()[ i ] ], grid)
+				moop.append_to_population(result)
+
+			pareto_set = moop.compute_pareto_front_and_set_summary(NSGA_POP)['pareto_set']
+
+			moop.initialize_population(np.maximum(NSGA_POP - pareto_set.shape[ 0 ], 0))
+
+			for i in range(pareto_set.shape[ 0 ]):
+				moop.append_to_population(pareto_set[ i, : ])
+
+			moop.evolve_population_only(NSGA_EPOCHS)
+
+			for i in range(pareto_set.shape[ 0 ]):
+				moop.append_to_population(pareto_set[ i, : ])
+
+		result = moop.compute_pareto_front_and_set_summary(NUM_POINTS_FRONTIER)
+
+		print 'Internal optimization finished'
+
+		# We remove repeated entries from the pareto front
+
+		frontier = result['frontier']
+
+		X = frontier[ 0 : 1, : ]
+
+		for i in range(frontier.shape[ 0 ]):
+			if np.min(cdist(frontier[ i : (i + 1), : ], X)) > 1e-8:
+			    	X = np.vstack((X, frontier[ i, ])) 
+	
+		frontier = X
+
+		cached_information['frontier'] = frontier
+		cached_information['v_ref'] = np.ones(len(obj_model_dict)) 
+
+		for k in range(frontier.shape[ 1 ]):
+			cached_information['v_ref'][ k ] = np.max(frontier[ :, k ]) + 1.0
+
+		return cached_information
+
+	# This functions optimizes a GP. 
+
+	def find_optimum_gp(self, obj_model, grid = None):
+
+		if grid is None:
+			grid = self.grid
+
+		# Compute the GP mean
+	
+		obj_mean, obj_var = obj_model.predict(grid, compute_grad = False)
+
+		# find the min and argmin of the GP mean
+
+		current_best_location = grid[np.argmin(obj_mean),:]
+		best_ind = np.argmin(obj_mean)
+		current_best_value = obj_mean[best_ind]
+
+		def f(x):
+			if x.ndim == 1:
+				x = x[None,:]
+
+			mn, var, mn_grad, var_grad = obj_model.predict(x, compute_grad = True)
+
+			return (mn.flatten(), mn_grad.flatten())
+
+		bounds = [(0.0,1.0)]*self.num_dims
+
+		x_opt, y_opt, opt_info = spo.fmin_l_bfgs_b(f, current_best_location.copy(), bounds=bounds, disp=0)
+
+		# make sure bounds were respected
+
+		x_opt[x_opt > 1.0] = 1.0
+		x_opt[x_opt < 0.0] = 0.0
+
+		return x_opt
+
+	# This method is the one that actually does the computation of the acquisition_function
+	# We follow the implementation considered in the R package GPareto
+	
+	def compute_acquisition(self, cand, obj_model_dict, information):
+
+		n_objectives = len(obj_model_dict)
+
+		# We compute the mean and the variances at each candidate point
+
+		mean = np.zeros((cand.shape[ 0 ], n_objectives))
+		var = np.zeros((cand.shape[ 0 ], n_objectives))
+		potSol = np.zeros((cand.shape[ 0 ], n_objectives))
+
+		n_objective = 0
+		for obj in obj_model_dict:
+			mean[ :, n_objective ], var[ :, n_objective ] = obj_model_dict[ obj ].predict(cand) 	
+
+			# We set gain = 3 which seems to give good results
+
+			potSol[ :, n_objective ] = mean[ :, n_objective ] - 3 * np.sqrt(var[ :, n_objective ])
+			n_objective += 1
+
+		frontier = information['frontier']
+		hv = HyperVolume(information['v_ref'].tolist())
+		hv_frontier = hv.compute(frontier.tolist())
+
+		total_acquisition = np.zeros(cand.shape[ 0 ])
+
+		# We loop over the candidate points
+
+		for i in range(cand.shape[ 0 ]):
+
+			penalty = 0.0
+
+			# We look for epsilon dominance
+
+			for k in range(frontier.shape[ 0 ]):
+				if np.all(frontier[ k , : ] <= potSol[ i, : ] + epsilon):
+					p = -1 + np.prod(1 + np.maximum(potSol[ i, : ] - frontier[ k, : ], np.zeros(n_objectives)))
+					penalty = np.maximum(penalty, p)
+				
+			if penalty == 0.0:
+				
+				newFront = np.vstack((frontier, np.array(potSol[ i, : ])))
+				hv_new = hv.compute(newFront.tolist())
+	
+				total_acquisition[ i ] = hv_frontier - hv_new
+			else:
+				total_acquisition[ i ] = penalty
+
+		return -1.0 * total_acquisition
+

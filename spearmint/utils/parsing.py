@@ -317,6 +317,7 @@ def parse_config_file(config_file_dir, config_file_name, verbose=True):
 
     # was not needed before, but needed now that we can also specify this by task,
     # not just by resource...
+
     if "max_finished_jobs" not in options:
         options["max_finished_jobs"] = DEFAULT_MAX_FINISHED_JOBS
 
@@ -396,15 +397,24 @@ def parse_config_file(config_file_dir, config_file_name, verbose=True):
     for task_name, task_opts in options['tasks'].iteritems():
         if "transformations" not in task_opts:
             # If you are using PES, turn off transformations!!
-            if options["acquisition"] == "PES":
+            if options["acquisition"] == "PES" or options["acquisition"] == "PESM" :
                 task_opts['transformations'] = []
             else:    
                 task_opts['transformations'] = DEFAULT_TRANSFORMATIONS
 
-    # Make sure there is exactly 1 objective
+
+    # If the problem is multiobjective, we only support PESM and ParEGO as the acquisition function for the moment
+
     numObjectives = len(get_objectives_and_constraints(options)[0])
-    if numObjectives != 1:
-        raise Exception("You have %d objectives. You must have exactly 1" % numObjectives)
+    numCons = len(get_objectives_and_constraints(options)[1])
+
+    if numObjectives > 1 and not (options["acquisition"] in set(['PESM','ParEGO', 'RANDOM', 'EHI', 'SUR', 'SMSego'])):
+        raise Exception("You have %d objectives (i.e. a multi-objective problem) and an acquisition function different \
+			from EHI, PESM, ParEGO, SUR or SMSego." \
+		% numObjectives)
+
+    if numObjectives > 1 and numCons > 0:
+        raise Exception("You have %d objectives (i.e. a multi-objective problem) and constraints (currently not supported)." % numObjectives)
 
     # set the default deltas
     for task_name, task_opt in options['tasks'].iteritems():

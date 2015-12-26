@@ -185,6 +185,7 @@
 
 import logging
 import numpy as np
+import copy
 from collections import OrderedDict
 
 
@@ -292,9 +293,17 @@ class InputSpace(object):
                 else:
                     logging.info(format_str % (indentation, '', '',                    param['values'][i]))
 
+    # Added to support multiple optimal solutions  for multi-objective optimization
+
+    def paramify(self, data_vector):
+
+        if data_vector.ndim == 1:
+		return self.paramify_single(data_vector)
+	else:
+		return self.paramify_multiple(data_vector)
 
     # Converts a vector in input space to the corresponding dict of params
-    def paramify(self, data_vector):
+    def paramify_single(self, data_vector):
         if data_vector.ndim != 1:
             raise Exception('Input to paramify must be a 1-D array.')
 
@@ -315,8 +324,74 @@ class InputSpace(object):
             
         return params
 
-    # Converts a dict of params to the corresponding vector in puts space
+    def paramify_multiple(self, data_vector):
+
+        if data_vector.ndim != 2:
+            raise Exception('Input to paramify must be a 2-D array.')
+
+        params = OrderedDict()
+        for name, vdict in self.variables_meta.iteritems():
+            indices = vdict['indices']
+            params[name] = {}
+            params[name]['type'] = vdict['type']
+
+            if vdict['type'] == 'int' or vdict['type'] == 'float':
+                params[name]['values'] = data_vector[:,indices]
+            elif vdict['type'] == 'enum':
+                raise Exception('Not supported pramification of vectors with types enum.')
+            else:
+                raise Exception('Unknown parameter type.')
+            
+        return params
+
     def vectorify(self, params):
+
+	multiple = False
+
+	for name, param in params.iteritems():
+		if len(param['values']) > 1 and (param['type'] == 'int' or param['type'] == 'float'):
+			multiple = True
+
+	if multiple == True:
+		return self.vectorify_multiple(params)
+	else:
+		return self.vectorify_single(params)
+	
+
+    def vectorify_multiple(self, params):
+
+	params = copy.deepcopy(params)
+
+	final = None
+	repeat = True
+
+	while repeat:
+
+	        v = np.zeros(self.num_dims)
+
+		for name, param in params.iteritems():
+
+			indices = self.variables_meta[name]['indices']
+
+			if param['type'] == 'int' or param['type'] == 'float':
+				v[indices] = param['values'][ 0 ]
+			else:
+       		         	raise Exception('Not supported vectorification of data vectors with types enum.')
+
+			if len(param['values']) == 1:
+				repeat = False
+			else:
+				param['values'] = param['values'][ 1 : len(param['values']) ]
+
+		if final is None:
+			final = v
+		else:
+			final = np.vstack((final, v))
+
+	return final
+
+    # Converts a dict of params to the corresponding vector in puts space
+    def vectorify_single(self, params):
         v = np.zeros(self.num_dims)
         for name, param in params.iteritems():
             indices = self.variables_meta[name]['indices']

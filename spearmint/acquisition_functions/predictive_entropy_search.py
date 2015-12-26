@@ -767,7 +767,6 @@ def predictEP(obj_model, con_models, a, x_star, Xtest, minimize=True):
     # m = mean, v = var, f = objective, c = constraint
 
 
-
 """
 See Miguel's paper (http://arxiv.org/pdf/1406.2541v1.pdf) section 2.1 and Appendix A
 
@@ -801,8 +800,9 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
     b = npr.uniform(low=0, high=2*np.pi, size=nFeatures)[:,None]
 
     # Just for testing the  random features in W and b... doesn't test the weights theta
+
     if testing:
-        return lambda x: np.sqrt(2 * sigma2 / nFeatures) * np.cos(np.dot(W, x.T) + b)
+        return lambda x: np.sqrt(2 * sigma2 / nFeatures) * np.cos(np.dot(W, gp.noiseless_kernel.transformer.forward_pass(x).T) + b)
 
     randomness = npr.randn(nFeatures)
 
@@ -812,7 +812,8 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
     # z is a vector of length nFeatures
 
     if gp.has_data:
-        tDesignMatrix = np.sqrt(2.0 * sigma2 / nFeatures) * np.cos(np.dot(W, gp.observed_inputs.T) + b)
+        tDesignMatrix = np.sqrt(2.0 * sigma2 / nFeatures) * np.cos(np.dot(W, \
+		gp.noiseless_kernel.transformer.forward_pass(gp.observed_inputs).T) + b)
 
         if use_woodbury_if_faster and N_data < nFeatures:
             # you can do things in cost N^2d instead of d^3 by doing this woodbury thing
@@ -872,6 +873,8 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
         if x.ndim == 1:
             x = x[None,:]
 
+        x = gp.noiseless_kernel.transformer.forward_pass(x)
+
         if not gradient:
             result = np.dot(theta.T, np.sqrt(2.0 * sigma2 / nFeatures) * np.cos(np.dot(W, x.T) + b))
             if result.size == 1:
@@ -879,9 +882,125 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
                 # (failure to do so messed up NLopt and it only gives a cryptic error message)
             return result
         else:
-            return np.dot(theta.T, -np.sqrt(2.0 * sigma2 / nFeatures) * np.sin(np.dot(W, x.T) + b) * W)
+            grad = np.dot(theta.T, -np.sqrt(2.0 * sigma2 / nFeatures) * np.sin(np.dot(W, x.T) + b) * W)
+	    return gp.noiseless_kernel.transformer.backward_pass(grad)
     
     return wrapper
+
+#"""
+#See Miguel's paper (http://arxiv.org/pdf/1406.2541v1.pdf) section 2.1 and Appendix A
+#
+#Returns a function the samples from the approximation...
+#
+#if testing=True, it does not return the result but instead the random cosine for testing only
+#
+#We express the kernel as an expectation. But then we approximate the expectation with a weighted sum
+#theta are the coefficients for this weighted sum. that is why we take the dot product of theta at the end
+#we also need to scale at the end so that it's an average of the random features. 
+#
+#if use_woodbury_if_faster is False, it never uses the woodbury version
+#"""
+#def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if_faster=True):
+#
+#    d = gp.num_dims
+#    N_data = gp.observed_values.size
+#
+#    nu2 = gp.noise_value()
+#
+#    sigma2 = gp.params['amp2'].value  # the kernel amplitude
+#
+#    # We draw the random features
+#    if gp.options['kernel'] == "SquaredExp":
+#        W = npr.randn(nFeatures, d) / gp.params['ls'].value
+#    elif gp.options['kernel'] == "Matern52":
+#        m = 5.0/2.0
+#        W = npr.randn(nFeatures, d) / gp.params['ls'].value / np.sqrt(npr.gamma(shape=m, scale=1.0/m, size=(nFeatures,1)))
+#    else:
+#        raise Exception('This random feature sampling is for the squared exp or Matern5/2 kernels and you are using the %s' % gp.options['kernel'])
+#    b = npr.uniform(low=0, high=2*np.pi, size=nFeatures)[:,None]
+#
+#    # Just for testing the  random features in W and b... doesn't test the weights theta
+#    if testing:
+#        return lambda x: np.sqrt(2 * sigma2 / nFeatures) * np.cos(np.dot(W, x.T) + b)
+#
+#    randomness = npr.randn(nFeatures)
+#
+#    # W has size nFeatures by d
+#    # tDesignMatrix has size Nfeatures by Ndata
+#    # woodbury has size Ndata by Ndata
+#    # z is a vector of length nFeatures
+#
+#    if gp.has_data:
+#        tDesignMatrix = np.sqrt(2.0 * sigma2 / nFeatures) * np.cos(np.dot(W, gp.observed_inputs.T) + b)
+#
+#        if use_woodbury_if_faster and N_data < nFeatures:
+#            # you can do things in cost N^2d instead of d^3 by doing this woodbury thing
+#
+#            # We obtain the posterior on the coefficients
+#            woodbury = np.dot(tDesignMatrix.T, tDesignMatrix) + nu2*np.eye(N_data)
+#            chol_woodbury = spla.cholesky(woodbury)
+#            # inverseWoodbury = chol2inv(chol_woodbury)
+#            z = np.dot(tDesignMatrix, gp.observed_values / nu2)
+#            # m = z - np.dot(tDesignMatrix, np.dot(inverseWoodbury, np.dot(tDesignMatrix.T, z)))
+#            m = z - np.dot(tDesignMatrix, spla.cho_solve((chol_woodbury, False), np.dot(tDesignMatrix.T, z))) 
+#            # (above) alternative to original but with cho_solve
+#            
+#            # z = np.dot(tDesignMatrix, gp.observed_values / nu2)
+#            # m = np.dot(np.eye(nFeatures) - \
+#            # np.dot(tDesignMatrix, spla.cho_solve((chol_woodbury, False), tDesignMatrix.T)), z)
+#            
+#            # woodbury has size N_data by N_data
+#            D, U = npla.eigh(woodbury)
+#            # sort the eigenvalues (not sure if this matters)
+#            idx = D.argsort()[::-1] # in decreasing order instead of increasing
+#            D = D[idx]
+#            U = U[:,idx]
+#            R = 1.0 / (np.sqrt(D) * (np.sqrt(D) + np.sqrt(nu2)))
+#            # R = 1.0 / (D + np.sqrt(D*nu2))
+#
+#            # We sample from the posterior of the coefficients
+#            theta = randomness - \
+#    np.dot(tDesignMatrix, np.dot(U, (R * np.dot(U.T, np.dot(tDesignMatrix.T, randomness))))) + m
+#
+#        else:
+#            # all you are doing here is sampling from the posterior of the linear model
+#            # that approximates the GP
+#            # Sigma = matrixInverse(np.dot(tDesignMatrix, tDesignMatrix.T) / nu2 + np.eye(nFeatures))
+#            # m = np.dot(Sigma, np.dot(tDesignMatrix, gp.observed_values / nu2))
+#            # theta = m + np.dot(randomness, spla.cholesky(Sigma, lower=False)).T
+#
+#            # Sigma = matrixInverse(np.dot(tDesignMatrix, tDesignMatrix.T) + nu2*np.eye(nFeatures))
+#            # m = np.dot(Sigma, np.dot(tDesignMatrix, gp.observed_values))
+#            # theta = m + np.dot(randomness, spla.cholesky(Sigma*nu2, lower=False)).T
+#
+#            chol_Sigma_inverse = spla.cholesky(np.dot(tDesignMatrix, tDesignMatrix.T) + nu2*np.eye(nFeatures))
+#            Sigma = chol2inv(chol_Sigma_inverse)
+#            m = spla.cho_solve((chol_Sigma_inverse, False), np.dot(tDesignMatrix, gp.observed_values))
+#            theta = m + np.dot(randomness, spla.cholesky(Sigma*nu2, lower=False)).T
+
+
+#    else:
+#        # We sample from the prior -- same for Matern
+#        theta = npr.randn(nFeatures)
+
+#    def wrapper(x, gradient): 
+#    # the argument "gradient" is 
+#    # not the usual compute_grad that computes BOTH when true
+#    # here it only computes the objective when true
+#        
+#        if x.ndim == 1:
+#            x = x[None,:]
+#
+#        if not gradient:
+#            result = np.dot(theta.T, np.sqrt(2.0 * sigma2 / nFeatures) * np.cos(np.dot(W, x.T) + b))
+#            if result.size == 1:
+#                result = float(result) # if the answer is just a number, take it out of the numpy array wrapper
+#                # (failure to do so messed up NLopt and it only gives a cryptic error message)
+#            return result
+#        else:
+#            return np.dot(theta.T, -np.sqrt(2.0 * sigma2 / nFeatures) * np.sin(np.dot(W, x.T) + b) * W)
+#    
+#    return wrapper
 
 """
 Given some approximations to the GP sample, find its minimum
@@ -1018,7 +1137,7 @@ def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True)
 
 class PES(AbstractAcquisitionFunction):
 
-    def __init__(self, num_dims, verbose=True, input_space=None, grid=None):
+    def __init__(self, num_dims, verbose=True, input_space=None, grid=None, opt = None):
         # we want to cache these. we use a dict indexed by the state integer
         self.cached_EP_solutions = dict()
         self.cached_x_star = dict()

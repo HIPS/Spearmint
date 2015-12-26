@@ -1,0 +1,65 @@
+!    -*- f90 -*-
+! Note: the context of this file is case sensitive.
+
+python module pbivnorm ! in 
+    interface  ! in :pbivnorm
+        subroutine pbivnorm(prob,lower,uppera,upperb,infin,correl,length) ! in :pbivnorm:pbivnorm.f
+		double precision intent(out), dimension(length) :: prob
+		double precision dimension(2) :: lower
+		double precision dimension(length) :: uppera
+		double precision dimension(length) :: upperb
+		double precision dimension(2) :: infin
+		double precision dimension(length) :: upperb
+		double precision dimension(length) :: correl
+		integer intent(hide), depend(uppera) :: length = len(uppera)
+        end subroutine pbivnorm
+        function mvbvn(lower,upper,infin,correl) ! in :pbivnorm:pbivnorm.f
+            double precision dimension(*) :: lower
+            double precision dimension(*) :: upper
+            integer dimension(*) :: infin
+            double precision :: correl
+            double precision :: mvbvn
+        end function mvbvn
+        function mvbvu(sh,sk,r) ! in :pbivnorm:pbivnorm.f
+            double precision :: sh
+            double precision :: sk
+            double precision :: r
+            double precision :: mvbvu
+        end function mvbvu
+        function mvstdt(nu,t) ! in :pbivnorm:pbivnorm.f
+            integer :: nu
+            double precision :: t
+            double precision :: mvstdt
+        end function mvstdt
+        function mvbvt(nu,lower,upper,infin,correl) ! in :pbivnorm:pbivnorm.f
+            integer :: nu
+            double precision dimension(*) :: lower
+            double precision dimension(*) :: upper
+            integer dimension(*) :: infin
+            double precision :: correl
+            double precision :: mvbvt
+        end function mvbvt
+        function mvbvtc(nu,l,u,infin,rho) ! in :pbivnorm:pbivnorm.f
+            integer :: nu
+            double precision dimension(*) :: l
+            double precision dimension(*) :: u
+            integer dimension(*) :: infin
+            double precision :: rho
+            double precision :: mvbvtc
+        end function mvbvtc
+        function mvbvtl(nu,dh,dk,r) ! in :pbivnorm:pbivnorm.f
+            integer :: nu
+            double precision :: dh
+            double precision :: dk
+            double precision :: r
+            double precision :: mvbvtl
+        end function mvbvtl
+        function mvphi(z) ! in :pbivnorm:pbivnorm.f
+            double precision :: z
+            double precision :: mvphi
+        end function mvphi
+    end interface 
+end python module pbivnorm
+
+! This file was auto-generated with f2py (version:2).
+! See http://cens.ioc.ee/projects/f2py2e/
