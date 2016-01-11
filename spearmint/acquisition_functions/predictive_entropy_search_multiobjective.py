@@ -2820,7 +2820,7 @@ def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True)
 
 		pareto_set = moo.compute_pareto_front_and_set_summary(NSGA2_POP)['pareto_set']
 
-		moo.initialize_population(np.maximum(NSGA_POP - pareto_set.shape[ 0 ], 0))
+		moo.initialize_population(np.maximum(NSGA2_POP - pareto_set.shape[ 0 ], 0))
 
 		for i in range(pareto_set.shape[ 0 ]):
 			moo.append_to_population(pareto_set[ i, : ])
