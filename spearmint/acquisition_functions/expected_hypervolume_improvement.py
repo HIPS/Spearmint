@@ -397,18 +397,18 @@ class EHI(AbstractAcquisitionFunction):
 
 			cell = dict()
 
-			indices = np.zeros(len(obj_model_dict))
+			indices = np.zeros(len(obj_model_dict)).astype(int)
 
 			j = i
 
 			for k in range(len(obj_model_dict)):
-				indices[ k ] = j % (frontier_sorted.shape[ 0 ] - 2)
+				indices[ k ] = int(j % (frontier_sorted.shape[ 0 ] - 2))
 				j = np.floor(j / (frontier_sorted.shape[ 0 ] - 2))
 
 			u = np.zeros(len(obj_model_dict))
 
 			for k in range(len(obj_model_dict)):
-				u[ k ] = frontier_sorted[ indices[ k ] + 1, k ]
+				u[ k ] = frontier_sorted[ int(indices[ k ] + 1), k ]
 
 			l = np.zeros(len(obj_model_dict))
 				

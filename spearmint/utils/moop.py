@@ -93,6 +93,7 @@ class MOOP(base):
 
 		n_task += 1
 
+
 	pareto_indices = _cull_algorithm(values)
 
 	values = values[ pareto_indices, : ]
@@ -676,7 +677,8 @@ def _cull_algorithm(pts):
     paretoPoints = np.array(cleared)
 
     for i in range(original_inputs.shape[ 0 ]):
-	if original_inputs[ i, : ] in paretoPoints:
+#	if original_inputs[ i, : ] in paretoPoints:
+	if np.min(cdist(original_inputs[ i : (i + 1), : ], paretoPoints)) < 1e-8:
 		indices[ i ] = True
 	else:
 		indices[ i ] = False
