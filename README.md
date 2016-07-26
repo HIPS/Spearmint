@@ -48,7 +48,7 @@ This branch also includes the method in
 
 ### STEP 1: Installation
 1. Download/clone the spearmint code
-2. Install the spearmint package using pip: "pip install -e \</path/to/spearmint/root\>" (the -e means changes will be reflected automatically)
+2. Install the spearmint package with "sudo python setup.py install"
 3. Download and install MongoDB: https://www.mongodb.org/
 4. Install the pymongo package using e.g., pip or anaconda
 5. Install PyGMO package (this is used for solving inner multi-objective optimization problems with known, simple and fast objectives).
@@ -56,7 +56,7 @@ This branch also includes the method in
 
 ### STEP 2: Setting up your experiment
 1. Create a callable objective function. See ../examples/moo/branin.py as an example.
-2. Create a config file. See ../examples/moo/config.json as an example. Here you will see that we specify the PESM acquisition function. Other alternatives are ParEGO, EHI, SMSego and SUR.
+2. Create a config file. See ../examples/moo/config.json as an example. Here you will see that we specify the PESM acquisition function. Other alternatives are ParEGO, EHI, SMSego and SUR. A detailed example is found at https://jmhl.org/blog/
 
 ### STEP 3: Running spearmint
 1. Start up a MongoDB daemon instance: mongod --fork --logpath \<path/to/logfile\> --dbpath \<path/to/dbfolder\>
