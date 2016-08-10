@@ -1,0 +1,46 @@
+{
+    "language"             : "PYTHON",
+    "main_file"            : "toy",
+    "acquisition"          : "PES",
+    "transformations"      : [],
+    "fit_mean"             : "False",
+    "max_time_mins"        : 15,
+    "polling_time"         : 0.1,
+    "constraint_delta"     : 1e-4,
+    "stability_jitter"     : 1e-6,
+    "use_multi_delta"      : "False",
+    "recommendations"      : "end-all",
+    "likelihood"           : "noiseless",
+    "variables" : {
+        "x" : {
+            "type" : "FLOAT",
+            "size" : 1,
+            "min"  : 0,
+            "max"  : 1
+        },
+        "y" : {
+            "type" : "FLOAT",
+            "size" : 1,
+            "min"  : 0,
+            "max"  : 1
+        }
+    },
+    "tasks" : {
+        "f" : {
+            "type" : "objective",
+            "group": 1,
+            "main_file":"f"
+        },
+        "c1" : {
+            "type": "constraint",
+            "group": 2,
+            "main_file":"c1"
+        },
+        "c2" : {
+            "type" : "constraint",
+            "group": 3,
+            "main_file":"c2"
+        }
+    }
+}
+

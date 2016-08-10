@@ -195,30 +195,18 @@ import time
 from collections import defaultdict
 
 from spearmint.utils.grad_check      import check_grad
+from spearmint.utils.nlopt           import print_nlopt_returncode
 from spearmint.grids                 import sobol_grid
 from spearmint.models.abstract_model import function_over_hypers
+from spearmint.models.abstract_model import function_over_hypers_single
 from spearmint.models.gp             import GP
 from spearmint                       import models
 from spearmint                       import acquisition_functions
 from spearmint.acquisition_functions.constraints_helper_functions import constraint_confidence_over_hypers, total_constraint_confidence_over_hypers
+from spearmint.utils.parsing         import GP_OPTION_DEFAULTS
 
 
-CHOOSER_OPTION_DEFAULTS  = {
-    'grid_size'      : 20000,
-    'grid_seed'      : 0,
-    'check_grad'     : False,
-    'parallel_opt'   : False,
-    'num_spray'      : 10,
-    'spray_std'      : 1e-4, # todo -- just set this to the tolerance?
-    'grid_subset'    : 1,
-    'optimize_best'  : True,
-    'optimize_acq'   : True,
-    'regenerate_grid': True  # whether to pick a new sobol grid every time.. grid_seed is ignored if this is True
-    }
 
-DEFAULT_NUMDESIGN = 1  # setting to 0 will cause an error. i humbly suggest setting it to 1
-NLOPT_METHOD_GRADIENT_BASED  = 'LD_MMA'
-NLOPT_METHOD_DERIVATIVE_FREE = 'LN_BOBYQA'
 
 try:
     import nlopt
@@ -233,25 +221,20 @@ def init(*args, **kwargs):
 class DefaultChooser(object):
     def __init__(self, input_space, options):
 
-        self.options = CHOOSER_OPTION_DEFAULTS.copy()
-        self.options.update(options)
+        self.options = options
 
         if self.options['parallel_opt']:
             raise NotImplementedError("Parallel optimization of EI not implemented.")
-        if self.options['grid_subset'] > 1:
-            raise NotImplementedError("Optimizing with multiple initializers not implemented.")
 
-        # load the acquisition function(s)
-        # we allow them to have different acquisition functions in case there is non-competitive decoupling
-        # self.acquisition_function_names = dict()
-        # self.acquisition_functions = dict()
-        # for task_name, task_opts in self.options["tasks"].iteritems():
-        #     self.acquisition_functions[task_name] = {
-        #         "name"  : task_opts["acquisition"],
-        #         "class" : getattr(acquisition_functions, task_opts["acquisition"])
-        #     }
-        self.acquisition_function_name = self.options["acquisition"]
-        self.acquisition_function = getattr(acquisition_functions, self.acquisition_function_name)
+        self.input_space = input_space
+        self.num_dims    = input_space.num_dims
+
+
+        self.acquisition_function_name = self.options["acquisition"]  # the name of the acquisition function
+        self.acquisition_function_class = getattr(acquisition_functions, self.acquisition_function_name) # the class
+        self.acquisition_function_instance = self.acquisition_function_class(self.num_dims, input_space=input_space) # an instantiated instance
+
+        self.fast_update = False  # only for plotting -- not important
 
         self.stored_recommendation = None
 
@@ -260,46 +243,45 @@ class DefaultChooser(object):
         self.objective   = {}
         self.constraints = defaultdict(dict)
         self.tasks       = None
-        self.acq         = {} # for plotting convenience, not important
+
+        # for the fast/slow updates with PESC (or any acquisition function potentially)
+        self.start_time_of_last_slow_update = -1
+        self.end_time_of_last_slow_update   = -1
+        # just for the scale-duration stuff, to know how long the fast updates are taking--
+        # not for the fast/slow update decision making
+        self.start_time_of_last_fast_update = -1
+        self.end_time_of_last_fast_update   = -1
+        self.duration_of_last_fast_update   = -1 # for scale-duration ONLY
+        self.duration_of_last_slow_update   = -1
+        # the code needs to work in all 4 cases: 2x2 on/off matrix of
+        # scale acquisition functions by durations (on/off) and perform fast/slow updates (on/off)
 
         if nlopt_imported:
-            self.nlopt_method                 = getattr(nlopt, NLOPT_METHOD_GRADIENT_BASED)
-            self.nlopt_method_derivative_free = getattr(nlopt, NLOPT_METHOD_DERIVATIVE_FREE)
-
-        self.input_space = input_space
-        self.num_dims    = input_space.num_dims
-
-        if not self.options['regenerate_grid']:
-            self.original_grid = sobol_grid.generate(self.num_dims, 
-                grid_size=self.options['grid_size'], 
-                grid_seed=self.options['grid_seed'])
-        self.grid = None
+            self.nlopt_method                 = getattr(nlopt, self.options['nlopt_method_has_grad'])
+            self.nlopt_method_derivative_free = getattr(nlopt, self.options['nlopt_method_no_grad'])
 
         # The tolerance for NLOPT in optimizaing things. if the tolerance is specified
         # in the original units, used that
         # otherwise, use the tolerance specified in the [0,1 units]
-        if options['tolerance'] is not None:
-            self.tolerance = options['tolerance']
-            # if the tolerance is a single number, repeat it over dimensions
-            if not isinstance(self.tolerance, np.ndarray) or self.tolerance.size == 1:
-                self.tolerance = self.tolerance + np.zeros(self.num_dims)
-            # transform the tolerance to the unit space
-            self.tolerance = input_space.rescale_to_unit(self.tolerance)
-        else:
-            self.tolerance = options['unit_tolerance']
+        # if options['tolerance'] is not None:
+        #     self.tolerance = options['tolerance']
+        #     # if the tolerance is a single number, repeat it over dimensions
+        #     if not isinstance(self.tolerance, np.ndarray) or self.tolerance.size == 1:
+        #         self.tolerance = self.tolerance + np.zeros(self.num_dims)
+        #     # transform the tolerance to the unit space
+        #     self.tolerance = input_space.rescale_to_unit(self.tolerance)
+        # else:
+        #     self.tolerance = options['unit_tolerance']
             # in this case, since we don't need to rescale it, we don't bother repeating it over
             # dimensions (although we could), because NLOPT interprets it properly
         # NOTE: tolerance is ignored if NLOPT is not being used!
 
 
-
-        # print self.tolerance
-
-    def fit(self, tasks, hypers=None):
+    def fit(self, tasks, hypers=None, fit_hypers=True):
         self.tasks = tasks
         new_hypers = dict()
 
-        self.stored_recommendation = None
+        self.best_computed = False
         # Reset these if you are refitting. The reason is that in suggest(), to save time,
         # it checks if there is anything stored here in case best() was already
         # called explicity. So, we need to make sure best is called again if needed!
@@ -312,55 +294,67 @@ class DefaultChooser(object):
             else:
                 raise Exception('Unknown task type.')
 
-        # Create the grid of optimization initializers
-
-        # A useful hack: add previously visited points to the grid (do this every time)
-        # TODO: may want to take the intersection here, to not re-add points from different tasks
-        if self.options['regenerate_grid']:
-            grid = sobol_grid.generate(self.num_dims, 
-            grid_size=self.options['grid_size'], 
-            grid_seed=npr.randint(0, self.options['grid_size']))
-        else:
-            grid = self.original_grid
-        for task_name, task in self.tasks.iteritems():
-            if task.has_valid_inputs():
-                grid = np.append(grid, task.valid_normalized_data_dict(self.input_space)['inputs'], axis=0)
-            if task.has_pending():
-                grid = np.append(grid, task.valid_normalized_data_dict(self.input_space)['pending'], axis=0)
-        self.grid = grid
-
         hypers = hypers if hypers is not None else defaultdict(dict)
 
-        # Find the total number of samples across tasks, and do not fit if less than DEFAULT_NUMDESIGN
+        # Find the total number of samples across tasks, and do not fit if less than self.options['initial design size']
         self.total_inputs = reduce(lambda x,y:x+y,map(lambda t: t._inputs.shape[0], self.tasks.values()), 0)
-        if self.total_inputs < DEFAULT_NUMDESIGN:
+        if self.total_inputs < self.options['initial_design_size']:
             return hypers
+
+
+        # FAST/SLOW updates
+        fit_hypers = True
+
+        if self.options['fast_updates']:
+            # if elapsed time since last slow update < duration OF last slow update, do fast update
+            elapsed_time_since_last_slow_update = time.time() - self.end_time_of_last_slow_update
+            duration_of_last_slow_update = self.end_time_of_last_slow_update - self.start_time_of_last_slow_update
+            logging.debug('Elapsed time since last full update: %.1f sec' % elapsed_time_since_last_slow_update)
+            logging.debug('Duration of last full update:        %.1f sec' % duration_of_last_slow_update)
+            if elapsed_time_since_last_slow_update*self.options['thoughtfulness'] < duration_of_last_slow_update:
+                logging.debug('Performing fast update; not sampling GP hypers.')
+                fit_hypers = False
+                self.start_time_of_last_fast_update = time.time()
+            else:
+                logging.debug('Performing full update; sampling GP hypers.')
+                self.start_time_of_last_slow_update = time.time()
+        else:
+            self.start_time_of_last_slow_update = time.time() # for scale-duration
 
         for task_name, task in tasks.iteritems():
             inputs  = task.valid_normalized_inputs(self.input_space)
-            values  = task.valid_normalized_values(self.input_space)
+
+            if self.options['normalize_outputs']:
+                values  = task.valid_normalized_values()
+            else:
+                values = task.valid_values
+
             pending = task.normalized_pending(self.input_space)
 
+            # print task_name
+            # print inputs
+            # print values
+            # print pending
+
             # Always want to fit all tasks, even if there is no data
-            # default_model = 'GP' if task.options['likelihood'].lower() in ['gaussian', 'noiseless'] else 'GPClassifier'
-            # model_class_name = task.options.get('model', default_model)
             model_class_name = task.options['model']
 
 
             # Don't re-instantiate the model every time
             if task_name not in self.models:
-                
-                if task.options["acquisition"] == "PES" and task.options.get("fit_mean", True):
-                    logging.debug("Warning: PES is used and fit_mean is on. Setting fit_mean to False!")
-                    task.options["fit_mean"] = False
-                    # raise Exception("If PES is used, then you must set fit_mean to 0")
+            
+                # NEW: if this task only depends on a subset of the variables, then
+                # we the number of dimensions of the model is actually smaller....
+                model_num_dims = task.options.get('subset num dims', self.num_dims)
 
-                self.models[task_name] = getattr(models, model_class_name)(self.num_dims, **task.options)
+                self.models[task_name] = getattr(models, model_class_name)(model_num_dims, **task.options)
 
                 logging.debug('')
-                logging.debug('Initialized %s for task %s' % (model_class_name, task_name))
-                for opt_name, opt_val in self.models[task_name].options.iteritems():
-                    logging.debug('  %-18s: %s' % (opt_name, opt_val))
+                logging.debug('Initialized %s in %d dimensions for task %s' % (model_class_name, model_num_dims, task_name))
+                # for opt_name, opt_val in self.models[task_name].options.iteritems():
+                    # logging.debug('  %-18s: %s' % (opt_name, opt_val))
+                # for opt_name in GP_OPTION_DEFAULTS: # just print out those relevant to GP
+                #     logging.debug('  %-18s: %s' % (opt_name, self.models[task_name].options[opt_name]))
                 logging.debug('')
 
             # We only want to fit the model if there is new data
@@ -380,21 +374,26 @@ class DefaultChooser(object):
                 # hypers are unchanged
                 new_hypers[task_name] = hypers[task_name] # ... .get(task_name, None)? 
             else:
-                logging.info('Fitting %s to %d data for %s task...' % (model_class_name, len(values), task_name))
+                if fit_hypers:
+                    logging.info('Fitting %s to %d data for %s task...' % (model_class_name, len(values), task_name))
                 new_hypers[task_name] = self.models[task_name].fit(
                     inputs,
                     values,
                     pending=pending,
-                    hypers=hypers.get(task_name, None))
+                    hypers=hypers.get(task_name, None),
+                    fit_hypers=fit_hypers)
 
 
-            if self.options['scale-duration']:
+            if self.options['scale_duration']:
                 # need to do the same here
                 if task_name not in self.duration_models:
                     # BTW, it's a bit wasteful to have a separate GP here, since the inputs are the same 
                     # for the durations and the other stuff, and the expensive part is this matrix inversion
                     # but let's just not worry about that right now
-                    self.duration_models[task_name] = GP(self.num_dims, likelihood='gaussian') # durations are noisy
+
+                    duration_gp_options = self.options.copy()
+                    duration_gp_options['likelihood'] = 'gaussian'
+                    self.duration_models[task_name] = GP(self.num_dims, **duration_gp_options) # durations are noisy
 
                     logging.debug('')
                     logging.debug('Initialized duration GP for task %s' % task_name)
@@ -411,7 +410,8 @@ class DefaultChooser(object):
                               not self.options["always_sample"]:
                     new_hypers['duration hypers'][task_name] = hypers['duration hypers'][task_name]
                 else:
-                    logging.info('Fitting GP to %d data for durations of %s task...' % (len(values), task_name))
+                    if fit_hypers:
+                        logging.info('Fitting GP to %d data for durations of %s task...' % (len(values), task_name))
                     # print hypers['duration hypers'].get(task_name, None)
                     # print task.durations
                     # print np.log(task.durations)
@@ -419,10 +419,39 @@ class DefaultChooser(object):
                     new_hypers['duration hypers'][task_name] = self.duration_models[task_name].fit(
                         self.input_space.to_unit(task.inputs), # not just valid inputs -- all inputs 
                         np.log(task.durations), 
-                        hypers=hypers['duration hypers'].get(task_name, None))
+                        hypers=hypers['duration hypers'].get(task_name, None),
+                        fit_hypers=fit_hypers)
                     # print task.durations
 
         return new_hypers
+
+    # generate a grid that includes the current best and some "spray" points
+    def generate_grid(self, grid_size):
+        # A useful hack: add previously visited points to the grid (do this every time)
+        # TODO: may want to take the intersection here, to not re-add points from different tasks
+        # use a random seed for the grid. but don't let it get too large or it will
+        # be slow to generate. pick between 0 and grid size, so it only takes 2x time
+        grid = sobol_grid.generate(self.num_dims, grid_size=grid_size, grid_seed=npr.randint(0, grid_size))
+        for task_name, task in self.tasks.iteritems():
+            if task.has_valid_inputs():
+                grid = np.append(grid, self.input_space.to_unit(task.valid_inputs), axis=0)
+            if task.has_pending():
+                grid = np.append(grid, self.input_space.to_unit(task.pending), axis=0)
+        if self.stored_recommendation is not None:
+            """ this will be None if options['recommendations'] is not "during" """
+            # logging.debug('Adding current best to grid of size %d' % grid_size)
+            # if there is a stored recommendation, add it and some points around it to the grid
+            current_best_location = self.stored_recommendation['model_model_input']
+            current_best_location = self.input_space.to_unit(current_best_location)
+            if current_best_location.ndim == 1:
+                current_best_location = current_best_location[None]
+
+            spray_points = npr.randn(self.options['num_spray'], self.num_dims)*self.options['spray_std'] + current_best_location
+            spray_points = np.minimum(np.maximum(spray_points,0.0),1.0) # make sure they are within the unit hypercube
+
+            grid = np.vstack((grid, spray_points, current_best_location))
+
+        return grid
 
     # There are 3 things going on here
     # 1) all tasks (self.tasks)
@@ -434,15 +463,8 @@ class DefaultChooser(object):
     # it is used in conjunction with durations, to take into account the thinking time
     # so that it's really bits per second including this stuff.
     # only used in the multi-task case where "scale-duration" is turned on...
-    def suggest(self, task_couplings, optim_start_time=None):
-
-        grid = self.grid
-
-        if grid is None:
-            raise Exception("You must call fit() before calling suggest()")
-
-        assert np.all(grid >= 0)
-        assert np.all(grid <= 1)
+    # fast_update is for PESC only -- if so you do not rerun the EP
+    def suggest(self, task_couplings):
 
         if not isinstance(task_couplings, dict):
             task_couplings = {task_name : 0 for task_name in task_couplings}
@@ -456,40 +478,60 @@ class DefaultChooser(object):
         # that is not good at all-- need to use the GPs to model the NaNs.
         # so, if I REALLY have no data, then I want to do this. But that means no data
         # from ANY of the tasks. 
-        if self.total_inputs < DEFAULT_NUMDESIGN:
-            design_index = npr.randint(0, grid.shape[0])
-            suggestion = self.input_space.from_unit(grid[design_index])
+        if self.total_inputs < self.options['initial_design_size']:
+            # design_index = npr.randint(0, grid.shape[0])
+            # suggestion = self.input_space.from_unit(grid[design_index])
+            total_pending = sum(map(lambda t: t.pending.shape[0], self.tasks.values()))
+            # i use pending as the grid seed so that you don't suggest the same thing over and over
+            # when you have multiple cores -- cool. this was probably weird on the 3 core thing
+            suggestion = sobol_grid.generate(self.num_dims, grid_size=100, grid_seed=total_pending)[0]
+            # above: for some reason you can't generate a grid of size 1. heh.
+
             logging.info("\nSuggestion:     ")
             self.input_space.paramify_and_print(suggestion.flatten(), left_indent=16)
             if len(set(task_couplings.values())) > 1: # if decoupled
-                return suggestion, [random.choice(task_names)]
+                # we need to pick the objective here
+                # normally it doesn't really matter, but in the decoupled case
+                # with PESC in particlar, if there are no objective data it skips
+                # the EP and gets all messed up
+                return suggestion, [self.objective.name]
+                # return suggestion, [random.choice(task_names)]
             else:  # if not decoupled. this is a bit of a hack but w/e
                 return suggestion, task_names
 
-        # Make sure all tasks here have the same acquisition function
-        # if len({self.acquisition_functions[t]["name"] for t in task_names}) > 1:
-            # raise Exception("If you are getting a suggestion for more than 1 task, they must all have the same acquisition function")
+        fast_update = False
+        if self.options['fast_updates']:
+            fast_update = self.start_time_of_last_slow_update <= self.end_time_of_last_slow_update
+            # this is FALSE only if fit() set self.start_time_of_last_slow_update,
+            # indicating that we in the the process of a slow update. else do a fast update
+        self.fast_update = fast_update
 
         # Compute the current best if it hasn't already been computed by the caller
-        if self.stored_recommendation is None:
+        # and we want to make recommendations at every iteration
+        if not self.best_computed and self.options['recommendations'] == "during":
             self.best() # sets self.stored_recommendation
+        # only need to do this because EI uses current_best_value --
+        # otherwise could run the whole thing without making recommendations at each iteration
+        # hmm... so maybe make it possible to do this when using PESC
+        if self.options['recommendations'] == "during":
+            current_best_value = self.stored_recommendation['model_model_value']
+            if current_best_value is not None:
+                current_best_value = self.objective.standardize_variance(self.objective.standardize_mean(current_best_value))
+        else:
+            current_best_value = None
 
-        current_best_value    = self.stored_recommendation['model_model_value']
-        current_best_location = self.stored_recommendation['model_model_input']
-        
-        # Put the best into the normalized space
-        current_best_location = self.input_space.to_unit(current_best_location)
-        if current_best_location.ndim == 1:
-            current_best_location = current_best_location[None]
-        if current_best_value is not None:
-            current_best_value = self.objective.standardize_variance(self.objective.standardize_mean(current_best_value))
+        # Create the grid of optimization initializers
+        acq_grid = self.generate_grid(self.options['fast_acq_grid_size'] if fast_update else self.options['acq_grid_size'])
 
-        # Add some extra candidates around the best so far (a useful hack)
-        spray_points = npr.randn(self.options['num_spray'], self.num_dims)*self.options['spray_std'] + current_best_location
-        spray_points = np.minimum(np.maximum(spray_points,0.0),1.0) # make sure they are within the unit hypercube
-        
-        # also add the current best
-        grid_plus_spray = np.vstack((grid, spray_points, current_best_location))
+        # initialize/create the acquisition function
+        logging.info("Initializing %s" % self.acquisition_function_name)
+        acquisition_function = self.acquisition_function_instance.create_acquisition_function(\
+            self.objective_model_dict, self.constraint_models_dict,
+            fast=fast_update, grid=acq_grid, current_best=current_best_value,
+            num_random_features=self.options['pes_num_rand_features'],
+            x_star_grid_size=self.options['pes_x*_grid_size'], 
+            x_star_tolerance=self.options['pes_opt_x*_tol'],
+            num_x_star_samples=self.options['pes_num_x*_samples'])
 
         # flip the data structure of task couplings
         task_groups = defaultdict(list)
@@ -498,46 +540,75 @@ class DefaultChooser(object):
         # ok, now task_groups is a dict with keys being the group number and the
         # values being lists of tasks
 
-        # Now we actually compute the acquisition function!
-        # first we instantiate the class
-        # i have chosen to instantiate it only once instead of for each task,
-        # because in PESC there is no need to redo the x* sampling and EP for each task
-        # since the difference only comes at then end. in fact, the acq could just return
+        # note: PESC could just return
         # the dict for tasks and the summing could happen out here, but that's ok
-        # since not all acquisition functions might be able to do that, this seems
-        # like a good compromise
-        self.acq = self.acquisition_function(self.num_dims, grid=grid_plus_spray, input_space=self.input_space)
-
+        # since not all acquisition functions might be able to do that
         task_acqs = dict()
         for group, task_group in task_groups.iteritems():
-            task_acqs[group] = self.compute_acquisition_function(self.acq, 
-                self.acquisition_function_name, grid_plus_spray, current_best_value, task_group)
+            task_acqs[group] = self.compute_acquisition_function(acquisition_function, acq_grid, task_group, fast_update)
         # Now task_acqs is a dict, with keys being the arbitrary group index, and the values
         # being a dict with keys "location" and "value"
 
-        if optim_start_time is not None:
-            elapsed_thinking_time = time.time() - optim_start_time
-            logging.debug("Elapsed thinking time: %f" % elapsed_thinking_time)
 
         # normalize things by the costs
         group_costs = dict()
         for task_name, group in task_couplings.iteritems():
-            if self.options['scale-duration']:
+            if self.options['scale_duration']:
+
                 # scale the acquisition function by the expected duration of the task
                 # i.e. set the cost to the expected duation
-                # print '**'
-                # print np.exp(self.duration_models[task_name].values)
-                # print self.duration_models[task_name].predict(task_acqs[group]["location"][None])[0]
-                # print self.duration_models[task_name].predict(task_acqs[group]["location"][None])[1]
                 expected_duration = np.exp(self.duration_models[task_name].predict(task_acqs[group]["location"][None])[0]) # [0] to grab mean only
-                logging.debug('Expected job duration for %s: %f' % (task_name, expected_duration))
-                if optim_start_time is not None:
-                    expected_duration += elapsed_thinking_time # take the job time + the bayes opt time
-                    logging.debug('   Total expected duration: %f' % expected_duration)
+
+                # now there are 2 cases, depending on whether you are doing the fast/slow updates
+                if self.options['fast_updates']:
+                    # complicated case
+                    # try to predict whether the next update will be slow or fast...
+
+                    if self.options['predict_fast_updates']:
+
+                        # fast_update --> what we are currently doing
+                        if fast_update: # if currently in a fast update
+                            predict_next_update_fast = (time.time() - self.end_time_of_last_slow_update + expected_duration)*self.options['thoughtfulness'] < self.duration_of_last_slow_update 
+                        else: # we are in a slow update
+                            predict_next_update_fast = expected_duration*self.options['thoughtfulness'] < self.duration_of_last_slow_update
+
+                        if predict_next_update_fast:
+                            # predict fast update
+                            # have we done a fast update yet:
+                            logging.debug('Predicting fast update next.')
+                            if self.duration_of_last_fast_update > 0:
+                                expected_thinking_time = self.duration_of_last_fast_update
+                            else:
+                                expected_thinking_time = 0.0
+                            # otherwise don't add anything
+                        else:
+                            logging.debug('Predicting slow update next.')
+                            if self.duration_of_last_slow_update > 0:
+                                expected_thinking_time = self.duration_of_last_slow_update
+                            else:
+                                expected_thinking_time = 0.0
+
+                    else: # not predicting -- decided to use FAST time for this, now SLOW time!
+                        if self.duration_of_last_fast_update > 0:
+                            expected_thinking_time = self.duration_of_last_fast_update
+                        else:
+                            expected_thinking_time = 0.0                    
+
+                else: # simpler case
+                    if self.duration_of_last_slow_update > 0:
+                        expected_thinking_time = self.duration_of_last_slow_update
+                    else:
+                        expected_thinking_time = 0.0
+                
+                expected_total_time = expected_duration + expected_thinking_time # take the job time + the bayes opt time
+
+                logging.debug('   Expected job duration for %s: %f' % (task_name, expected_duration))
+                logging.debug("   Expected thinking time:  %f" % expected_thinking_time)
+                logging.debug('   Total expected duration: %f' % expected_total_time)
                 # we take the exp because we model the log durations. this prevents us
                 # from ever predicting a negative duration...
                 # print '%s: cost %f' % (task_name, group_costs[group])
-                group_costs[group] = expected_duration
+                group_costs[group] = expected_total_time
             else:
                 group_costs[group] = self.tasks[task_name].options["cost"]
 
@@ -547,8 +618,8 @@ class DefaultChooser(object):
                 best_acq["value"] /= group_costs[group]
                 if group_costs[group] != 1:
                     logging.debug("Scaling best acq for %s by a %s factor of 1/%f, from %f to %f" % ( \
-                            task_groups[group], 
-                                "duration" if self.options['scale-duration'] else "cost",
+                            ",".join(task_groups[group]), 
+                                "duration" if self.options['scale_duration'] else "cost",
                             group_costs[group],
                             best_acq["value"]*group_costs[group],
                             task_acqs[group]["value"]))
@@ -577,71 +648,56 @@ class DefaultChooser(object):
         logging.info("\nSuggestion: task(s) %s at location" % ",".join(suggested_tasks))
         self.input_space.paramify_and_print(suggested_location.flatten(), left_indent=16)
 
+        if not fast_update:
+            self.end_time_of_last_slow_update = time.time() # the only one you need for fast/slow update, the rest for scale-duration
+            self.duration_of_last_slow_update = time.time() - self.start_time_of_last_slow_update
+        else:
+            self.end_time_of_last_fast_update = time.time()
+            self.duration_of_last_fast_update = time.time() - self.start_time_of_last_fast_update
+
         return suggested_location, suggested_tasks
         # TODO: probably better to return suggested group, not suggested tasks... whatever.
 
 
-    def compute_acquisition_function(self, acq, acq_name, grid, current_best_value, tasks):
+    def compute_acquisition_function(self, acquisition_function, grid, tasks, fast_update):
 
-        logging.info("Computing %s for %s" % (acq_name, ', '.join(tasks)))
+        logging.info("Computing %s on grid for %s." % (self.acquisition_function_name, ', '.join(tasks)))
 
+
+        # Special case -- later generalize this to more complicated cases
+        # If there is only one task here, and it depends on only a subset of the parameters
+        # then let's do the optimization in lower dimensional space... right?
+        # i wonder though, will the acquisition function actually have 0 gradients in those
+        # directions...? maybe not. but they are irrelevant. but will they affect the optimization?
+        # hmm-- seems not worth the trouble here...
+
+        # if we are doing a fast update, just use one of the hyperparameter samples
+        # avg_hypers = function_over_hypers if not fast_update else function_over_hypers_single
+        avg_hypers = function_over_hypers
 
         # Compute the acquisition function on the grid
-        grid_acq = function_over_hypers(self.models.values(), acq.acquisition, 
-                                        self.objective_model_dict, self.constraint_models_dict,
-                                        grid, current_best_value, compute_grad=False, tasks=tasks)
-
-
-        # if the acquisition function is the same everywhere (usually all zeros)
-        # then there is no point using it or optimizing it
-        #if np.max(grid_acq) == np.min(grid_acq):
-        #    logging.debug('Acquisition function is constant, suggesting random grid point')
-        #    design_index = np.random.randint(0, self.grid.shape[0])
-        #    suggestion = self.input_space.from_unit(self.grid[design_index])
-        #    logging.info("\nSuggestion:     ")
-        #    self.input_space.paramify_and_print(suggestion.flatten(), left_indent=16)
-        #    return suggestion, task_names[0]
-
-        # # Find the points on the grid with highest EI
-        # best_grid_inds = np.argsort(grid_ei)[-self.options['grid_subset']:]
-        # best_grid_pred = grid_plus_spray[best_grid_inds]
+        grid_acq = avg_hypers(self.models.values(), acquisition_function,
+                                        grid, compute_grad=False, tasks=tasks)
 
         # The index and value of the top grid point
         best_acq_ind = np.argmax(grid_acq)
         best_acq_location = grid[best_acq_ind]
         best_grid_acq_value  = np.max(grid_acq)
 
-        # abc = total_constraint_confidence_over_hypers(self.constraint_models, best_acq_location[None], compute_grad=False)
-        # logging.info('***Constraint prob at best grid acq: %f' % abc)
-        # logging.info('***Total probs at grid 0: %f' % total_constraint_confidence_over_hypers(self.constraint_models, self.grid[0][None], compute_grad=False))
-        # logging.info('Grid len: %d' % grid_acq.size)
-        # logging.info('Best value: %s' % current_best_value)
-        # bbb = function_over_hypers(self.models.values(), acq.acquisition,
-        #                         self.objective_model_dict, self.constraint_models_dict,
-        #                         self.grid[0][None], current_best_value, compute_grad=False)
-        # logging.info('**acq at grid 0: %f' % bbb)
-        # ccc = function_over_hypers(self.models.values(), acq.acquisition,
-        #                         self.objective_model_dict, self.constraint_models_dict,
-        #                         best_acq_location[None], current_best_value, compute_grad=False)
-        # logging.info('***acq at best acq : %f' % ccc)
-
-        # logging.info("\nBest acq grid value:     ")
-        # self.input_space.paramify_and_print(self.input_space.from_unit(best_acq_location).flatten(), left_indent=16)
-        
+        has_grads = self.acquisition_function_instance.has_gradients
 
         if self.options['optimize_acq']:
 
             if self.options['check_grad']:
-                check_grad(lambda x: function_over_hypers(self.models.values(), acq.acquisition, 
-                    self.objective_model_dict, self.constraint_models_dict, x, current_best_value, compute_grad=True),
-                           best_acq_location, verbose=True, tasks=tasks)
+                check_grad(lambda x: avg_hypers(self.models.values(), acquisition_function, 
+                    x, compute_grad=True), best_acq_location)
 
             if nlopt_imported:
 
-                alg = self.nlopt_method if acq.has_gradients else self.nlopt_method_derivative_free
+                alg = self.nlopt_method if has_grads else self.nlopt_method_derivative_free
                 opt = nlopt.opt(alg, self.num_dims)
 
-                logging.info('Optimizing %s with NLopt, %s' % (acq_name, opt.get_algorithm_name()))
+                logging.info('Optimizing %s with NLopt, %s' % (self.acquisition_function_name, opt.get_algorithm_name()))
                 
                 opt.set_lower_bounds(0.0)
                 opt.set_upper_bounds(1.0)
@@ -652,20 +708,18 @@ class DefaultChooser(object):
                         x = x[None,:]
 
                     if put_gradient_here.size > 0:
-                        a, a_grad = function_over_hypers(self.models.values(), acq.acquisition, 
-                                self.objective_model_dict, self.constraint_models_dict,
-                                x, current_best_value, compute_grad=True, tasks=tasks)
+                        a, a_grad = avg_hypers(self.models.values(), acquisition_function, 
+                                x, compute_grad=True, tasks=tasks)
                         put_gradient_here[:] = a_grad.flatten()
                     else:
-                        a = function_over_hypers(self.models.values(), acq.acquisition,
-                                self.objective_model_dict, self.constraint_models_dict,
-                                x, current_best_value, compute_grad=False, tasks=tasks)
+                        a = avg_hypers(self.models.values(), acquisition_function,
+                                x, compute_grad=False, tasks=tasks)
 
                     return float(a)
 
                 opt.set_max_objective(f)
-                opt.set_xtol_abs(self.tolerance)
-                opt.set_maxeval(self.options['opt_acq_maxeval'])
+                opt.set_xtol_abs(self.options['fast_opt_acq_tol'] if fast_update else self.options['opt_acq_tol'])
+                opt.set_maxeval(self.options['fast_acq_grid_size'] if fast_update else self.options['acq_grid_size'])
 
                 x_opt = opt.optimize(best_acq_location.copy())
 
@@ -675,21 +729,7 @@ class DefaultChooser(object):
 
                 # overwrite the current best if optimization succeeded
                 if (returncode > 0 or returncode==-4) and y_opt > best_grid_acq_value:
-
-                    if returncode == 1:
-                        print 'Normal termination'
-                    elif returncode == 2:
-                        print 'stopval reached'
-                    elif returncode == 3:
-                        print 'ftol rel or abs reached'
-                    elif returncode == 4:
-                        print 'xtol rel or abs reached'
-                    elif returncode == 5:
-                        print 'maxeval %d reached' % self.options['opt_acq_maxeval']
-                    elif returncode == 6:
-                        print 'max time reached'
-                    elif returncode == -4:
-                        print 'roundoff limited termination'
+                    print_nlopt_returncode(returncode, logging.debug)
 
                     best_acq_location = x_opt
                     best_acq_value = y_opt
@@ -698,30 +738,28 @@ class DefaultChooser(object):
 
             else: # use bfgs
                 # see http://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.optimize.fmin_l_bfgs_b.html
-                logging.info('Optimizing %s with L-BFGS%s' % (acq_name, '' if acq.has_gradients else ' (numerically estimating gradients)'))
+                logging.info('Optimizing %s with L-BFGS%s' % (self.acquisition_function_name, '' if has_grads else ' (numerically estimating gradients)'))
 
-                if acq.has_gradients:
+                if has_grads:
                     def f(x):
                         if x.ndim == 1:
                             x = x[None,:]
-                        a, a_grad = function_over_hypers(self.models.values(), acq.acquisition, 
-                                    self.objective_model_dict, self.constraint_models_dict,
-                                    x, current_best_value, compute_grad=True, tasks=tasks)
+                        a, a_grad = avg_hypers(self.models.values(), acquisition_function, 
+                                    x, compute_grad=True, tasks=tasks)
                         return (-a.flatten(), -a_grad.flatten())
                 else:
                     def f(x):
                         if x.ndim == 1:
                             x = x[None,:]
 
-                        a = function_over_hypers(self.models.values(), acq.acquisition, 
-                                    self.objective_model_dict, self.constraint_models_dict,
-                                    x, current_best_value, compute_grad=False, tasks=tasks)
+                        a = avg_hypers(self.models.values(), acquisition_function, 
+                                    x, compute_grad=False, tasks=tasks)
 
                         return -a.flatten()
                 
                 bounds = [(0,1)]*self.num_dims
                 x_opt, y_opt, opt_info = spo.fmin_l_bfgs_b(f, best_acq_location.copy(), 
-                    bounds=bounds, disp=0, approx_grad=not acq.has_gradients)
+                    bounds=bounds, disp=0, approx_grad=not has_grads)
                 y_opt = -y_opt
                 # make sure bounds are respected
                 x_opt[x_opt > 1.0] = 1.0
@@ -734,12 +772,12 @@ class DefaultChooser(object):
                 else:
                     best_acq_value = best_grid_acq_value
 
-            logging.debug('Best %s before optimization: %f' % (acq_name, best_grid_acq_value))
-            logging.debug('Best %s after  optimization: %f' % (acq_name, best_acq_value))
+            logging.debug('Best %s before optimization: %f' % (self.acquisition_function_name, best_grid_acq_value))
+            logging.debug('Best %s after  optimization: %f' % (self.acquisition_function_name, best_acq_value))
 
         else:
             # do not optimize the acqusition function
-            logging.debug('Best %s on grid: %f' % (acq_name, best_grid_acq_value))
+            logging.debug('Best %s on grid: %f' % (self.acquisition_function_name, best_grid_acq_value))
 
         return {"location" : best_acq_location, "value" : best_acq_value}
 
@@ -761,10 +799,19 @@ class DefaultChooser(object):
 
     # Returns a boolean array of size pred.shape[0] indicating whether the prob con-constraint is satisfied there
     def probabilistic_constraint_over_hypers(self, pred):
-        return reduce(np.logical_and, 
-            [constraint_confidence_over_hypers(self.models[c], pred) >= 1.0-self.tasks[c].options['delta']
-                for c in self.constraints], 
-                np.ones(pred.shape[0], dtype=bool))
+        if self.options['use_multi_delta']:
+            # We define the probabilistic constraint as follows:
+            # for all k=1,...,K Pr(c_k >= 0) >= 1-delta_k
+            # This way you have a delta for each constraint, hence "multi delta"
+            return reduce(np.logical_and, 
+                [constraint_confidence_over_hypers(self.models[c], pred) >= 1.0-self.tasks[c].options['constraint_delta']
+                    for c in self.constraints], 
+                    np.ones(pred.shape[0], dtype=bool))
+        else:
+            # We define the probabilistic constraint as follows:
+            # Pr(c_k >=0 for all k=1,...,K) >= 1-delta
+            # This way there is only one global delta
+            return total_constraint_confidence_over_hypers(self.constraint_models, pred, compute_grad=False) >= 1.0-self.options['constraint_delta']
 
 
     def best(self):
@@ -776,13 +823,13 @@ class DefaultChooser(object):
         # (The last one is weird and intended for cases where the objective isn't noisy but the constraint is)
 
 
-        # If there is not enough data, just return something random...
-        self.total_inputs = reduce(lambda x,y:x+y,map(lambda t: t._inputs.shape[0], self.tasks.values()), 0)
-        if self.total_inputs < DEFAULT_NUMDESIGN:
-            design_index = np.random.randint(0, self.grid.shape[0])
+        self.total_inputs = sum(map(lambda t: t._inputs.shape[0], self.tasks.values()))
+        if self.total_inputs < self.options['initial_design_size']:
+            # If there is not enough data, just return something random...
+            random_rec = npr.rand(1,self.num_dims)
 
             # what is the point of this exactly? oh well
-            rec =  {'model_model_input' : self.input_space.from_unit(self.grid[design_index]),
+            rec =  {'model_model_input' : self.input_space.from_unit(random_rec),
                     'model_model_value' : None,
                     'obser_obser_input' : None,
                     'obser_obser_value' : None,
@@ -792,7 +839,9 @@ class DefaultChooser(object):
         elif self.numConstraints() == 0:
             logging.info('Computing current best...')
             
-            val, loc = self.best_unconstrained()
+            rec_grid = self.generate_grid(self.options['rec_grid_size'])
+
+            val, loc = self.best_unconstrained(rec_grid)
             val_o, loc_o = self.bestObservedUnconstrained()
 
             rec =  {'model_model_input' : loc,
@@ -804,11 +853,14 @@ class DefaultChooser(object):
 
         else:
             logging.info('Computing current best...')
+
+            rec_grid = self.generate_grid(self.options['rec_grid_size'])
+
             # instead of using the augmented grid here, we are going to re-augment it ourselves
             # just to deal with any possibly numerical issues of the probabilistic constraint
             # being violated somewhere that we actually observed already...
             # (above: is this comment out of date? i'm confused)
-            pc = self.probabilistic_constraint_over_hypers(self.grid)
+            pc = self.probabilistic_constraint_over_hypers(rec_grid)
             if not np.any(pc) or self.objective.valid_values.size == 0:
                 # If probabilistic constraint is violated everywhere
                 # The reason for the OR above:
@@ -816,7 +868,7 @@ class DefaultChooser(object):
                 # then obj has no valid values, so it has never been standardized, so it cannot be unstandardized
                 # this is probably not going to happen because -- the MC should never be satisfied if you have no values... right?
                 # unless you pick some really weak constraint that is satisfied in the prior...
-                val_m, loc_m = self.best_constrained_no_solution()
+                val_m, loc_m = self.best_constrained_no_solution(rec_grid)
                 val_o, loc_o = self.bestObservedConstrained()
 
                 rec =  {'model_model_input' : loc_m,
@@ -826,7 +878,7 @@ class DefaultChooser(object):
                         'obser_model_input' : None,
                         'obser_model_value' : None}
             else:
-                val_m, loc_m = self.best_constrained_solution_exists(pc)
+                val_m, loc_m = self.best_constrained_solution_exists(pc, rec_grid)
                 val_o, loc_o = self.bestObservedConstrained()
                 rec_obser_model_val, rec_obser_model_loc = self.best_obser_model_constrained_solution_exists()
 
@@ -838,6 +890,7 @@ class DefaultChooser(object):
                         'obser_model_value' : rec_obser_model_val}
 
         self.stored_recommendation = rec
+        self.best_computed = True
 
         return rec
 
@@ -848,23 +901,23 @@ class DefaultChooser(object):
     because these are x locations which do not make sense to average
     So we average over hypers and then optimize THAT
     """
-    def best_unconstrained(self):
+    def best_unconstrained(self, grid):
+
+        obj_model = self.obj_model
+
+        # Compute the GP mean
+        obj_mean, obj_var = obj_model.function_over_hypers(obj_model.predict, grid)
+
+        # find the min and argmin of the GP mean
+        current_best_location = grid[np.argmin(obj_mean),:]
+        best_ind = np.argmin(obj_mean)
+        current_best_value = obj_mean[best_ind]
+        
         """
         if options['optimize_best'] is False, we will just compute on a grid and take the best
         if it is True (default), then we try to use NLopt. Otherwise if NLopt isn't installed
         we will use some python SLSQP 
         """
-        obj_model = self.models[self.objective.name]
-
-        # Compute the GP mean
-        obj_mean, obj_var = obj_model.function_over_hypers(obj_model.predict, self.grid)
-
-        # find the min and argmin of the GP mean
-        current_best_location = self.grid[np.argmin(obj_mean),:]
-        best_ind = np.argmin(obj_mean)
-        current_best_value = obj_mean[best_ind]
-        
-        # optimize with NLopt?
         if self.options['optimize_best']:
             if nlopt_imported:
                 opt = nlopt.opt(self.nlopt_method, self.num_dims)
@@ -890,9 +943,8 @@ class DefaultChooser(object):
 
                 opt.set_min_objective(f)
 
-                maxEvals = 1000
-                opt.set_xtol_abs(self.tolerance)
-                opt.set_maxeval(maxEvals)
+                opt.set_xtol_abs(self.options['opt_rec_tol'])
+                opt.set_maxeval(self.options['rec_grid_size'])
 
                 x_opt = opt.optimize(current_best_location.copy())
 
@@ -902,8 +954,7 @@ class DefaultChooser(object):
 
                 # overwrite the current best if optimization succeeded
                 if (returncode > 0 or returncode==-4) and y_opt < current_best_value:
-                    if returncode == 5:
-                        logging.debug('Optimization reach max evals of %d.' % maxEvals)
+                    print_nlopt_returncode(returncode, logging.debug)
                     logging.debug('Optimizing improved the best by %f.' % self.objective.unstandardize_variance(current_best_value-y_opt))
                     current_best_location = x_opt
             else:
@@ -946,19 +997,23 @@ class DefaultChooser(object):
 
         return unnormalized_best_value, current_best_location_orig_space
 
-    def best_constrained_no_solution(self):            
+    def best_constrained_no_solution(self, grid): 
 
-        logging.info('\nNo feasible solution found (yet).\n')
+        logging.info('\nNo feasible solution found (yet).')
+        logging.debug("(or no collected data for the objective yet)")
+        logging.info('')
 
         # Compute the product of the probabilities, and return None for the current best value
-        total_probs = total_constraint_confidence_over_hypers(self.constraint_models, self.grid, compute_grad=False)
+        total_probs = total_constraint_confidence_over_hypers(self.constraint_models, grid, compute_grad=False)
         best_probs_ind = np.argmax(total_probs)
-        best_probs_location = self.grid[best_probs_ind,:]
+        best_probs_location = grid[best_probs_ind,:]
         best_probs_value = np.max(total_probs)
+
+        logging.debug('Best total prob on grid: %f' % best_probs_value)
 
         # logging.info('***Best total probs before opt: %f' % best_probs_value)
         # logging.info('***Grid len fit: %d' % total_probs.size)
-        # logging.info('***Total probs at grid 0: %f' % total_constraint_confidence_over_hypers(self.constraint_models, self.grid[0][None], compute_grad=False))
+        # logging.info('***Total probs at grid 0: %f' % total_constraint_confidence_over_hypers(self.constraint_models, grid[0][None], compute_grad=False))
 
         if self.options['optimize_best']:
             if nlopt_imported:
@@ -983,11 +1038,10 @@ class DefaultChooser(object):
                     return float(pv) 
 
                 opt.set_max_objective(f) # MAXIMIZE the probability
-                opt.set_xtol_abs(self.tolerance)
-                opt.set_maxeval(1000)
-
-                # don't let this part take longer than the grid part
-                opt.set_maxeval(self.options['grid_size'])
+                opt.set_xtol_abs(self.options['opt_rec_tol'])
+                # don't want this part take longer than the grid part
+                # this is just a total heuristic to set it to the grid size... hmmm
+                opt.set_maxeval(self.options['rec_grid_size'])
 
                 x_opt = opt.optimize(best_probs_location.copy())
 
@@ -997,6 +1051,7 @@ class DefaultChooser(object):
 
                 # overwrite the current best if optimization succeeded
                 if (returncode > 0 or returncode==-4) and y_opt > best_probs_value:
+                    print_nlopt_returncode(returncode, logging.debug)
                     logging.debug('Optimizing improved the best by %f.' % abs(y_opt-best_probs_value))
                     best_probs_location = x_opt
 
@@ -1040,18 +1095,18 @@ class DefaultChooser(object):
 
         return None, best_probs_location_orig_space
 
-    def best_constrained_solution_exists(self, pc):
+    def best_constrained_solution_exists(self, pc, grid):
         # A feasible region has been found
         logging.info('Feasible solution found.\n')
 
         # Compute GP mean and find minimum
-        obj_model = self.models[self.objective.name]
+        obj_model = self.obj_model
 
-        mean, var = obj_model.function_over_hypers(obj_model.predict, self.grid)
+        mean, var = obj_model.function_over_hypers(obj_model.predict, grid)
         valid_mean = mean[pc]
         valid_var = var[pc]
         best_ind = np.argmin(valid_mean)
-        current_best_location = (self.grid[pc])[best_ind,:]
+        current_best_location = (grid[pc])[best_ind,:]
         current_best_value = np.min(valid_mean)
         
         if self.options['optimize_best']:
@@ -1064,7 +1119,8 @@ class DefaultChooser(object):
                 opt.set_lower_bounds(0.0)
                 opt.set_upper_bounds(1.0)
 
-                opt.set_xtol_abs(self.tolerance)
+                opt.set_xtol_abs(self.options['opt_rec_tol'])
+                opt.set_maxeval(self.options['rec_grid_size'])
 
                 # define the objective function
                 # here we want to MAXIMIZE the probability
@@ -1101,12 +1157,12 @@ class DefaultChooser(object):
                         else:
                             pv = constraint_confidence_over_hypers(self.models[constraint], x, compute_grad=False)
 
-                        delta = self.tasks[constraint].options['delta']
+                        delta = self.tasks[constraint].options['constraint_delta']
                         put_result_here[i] = float(1.0-delta-pv) 
 
                 # the NLOPT constraint tolerance-- the amount by which it is ok for NLOPT to 
                 # violate the constraints
-                tol = [self.tasks[constraint].options['constraint_tol'] for constraint in self.constraints]
+                tol = [self.tasks[constraint].options['nlopt_constraint_tol'] for constraint in self.constraints]
                 opt.add_inequality_mconstraint(g, tol)
 
                 x_opt = opt.optimize(current_best_location.copy())
@@ -1119,6 +1175,8 @@ class DefaultChooser(object):
                 if not (returncode > 0 or returncode==-4):
                     logging.debug('NLOPT returncode indicates failure--discarding')
                 elif y_opt < current_best_value:
+                    print_nlopt_returncode(returncode, logging.debug)
+
                     nlopt_constraints_results = np.zeros(self.numConstraints())
                     g(nlopt_constraints_results, x_opt, np.zeros(0))
                     # if np.all(nlopt_constraints_results<=tol):
@@ -1127,6 +1185,7 @@ class DefaultChooser(object):
                     # else:
                     #     logging.debug('NLOPT violated %d constraint(s)--discarding.' % np.sum(nlopt_constraints_results>0)) 
                 else:
+                    print_nlopt_returncode(returncode, logging.debug)
                     logging.debug('NLOPT did not improve the objective--discarding.')
 
             else:
@@ -1154,7 +1213,7 @@ class DefaultChooser(object):
                     g_func = np.zeros(self.numConstraints())
                     for i_g,constraint in enumerate(self.constraints):
                         pv = constraint_confidence_over_hypers(self.models[constraint], x, compute_grad=False)
-                        delta = self.tasks[constraint].options['delta']
+                        delta = self.tasks[constraint].options['constraint_delta']
                         g_func[i_g] = (pv-(1.0-delta)).flatten()
                     return g_func
 
@@ -1203,7 +1262,7 @@ class DefaultChooser(object):
         # this is the variance at that location, not the standard deviation of the minimum... 
         # not sure if this distinction is a big deal
 
-        conf_string = ','.join(['%s:%.1f%%' % (constraint, 100.0*constraint_confidence_over_hypers(self.models[constraint], current_best_location, compute_grad=False)) for constraint in self.constraints])
+        conf_string = ','.join(['%s:%.5f' % (constraint, constraint_confidence_over_hypers(self.models[constraint], current_best_location, compute_grad=False)) for constraint in self.constraints])
         logging.info('\nMinimum expected objective value satisfying constraints w/ high prob (%s): %f\n' % (conf_string, unnormalized_best))
         logging.info('At location:    ')
         current_best_location_orig_space = self.input_space.from_unit(current_best_location).flatten()
@@ -1302,5 +1361,3 @@ class DefaultChooser(object):
 
     def numConstraints(self):
         return len(self.constraints)
-
-

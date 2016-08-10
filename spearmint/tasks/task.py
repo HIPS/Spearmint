@@ -276,47 +276,24 @@ class Task(object):
     def maxCompleteReached(self, jobs):
         return self.numComplete(jobs) >= self.options['max_finished_jobs']
 
-    def valid_normalized_values(self, input_space):
-        if self.type == 'objective':
+    def valid_normalized_values(self):
+        if self.options['likelihood'].lower() in ['binomial', 'step']:
+            # If binomial, don't standardize!
+            return self.valid_values # COUNTS
+        elif self.type == 'objective':
             # If it's a regular objective
             values = self.valid_values
             values = self.standardize_mean(values)
             values = self.standardize_variance(values)
             return values
         elif self.type == 'constraint':
-            # If it's a constraint we do not standardize
-            return self.valid_values
-        else:
-            raise Exception("Unknown task type: %s" % self.type)
-
-
-    def valid_normalized_data_dict(self, input_space):
-        dd = {}
-        dd['inputs'] = input_space.to_unit(self.valid_inputs)
-
-        if self.options['likelihood'].lower() in ['binomial', 'step']:
-            # If binomial, don't standardize!
-            dd['counts'] = self.valid_values
-        elif self.type == 'objective':
-            # If it's a regular objective
-            dd['values'] = self.valid_values
-            dd['values'] = self.standardize_mean(dd['values'])
-            dd['values'] = self.standardize_variance(dd['values'])
-        elif self.type == 'constraint':
-            # If it's a constraint of continuous type, we can standardize
-            # the variance... but not the mean!!! because the value
-            # 0 has a special meaning here
-            dd['values'] = self.standardize_variance(self.valid_values)
-        else:
-            raise Exception("unrecognized type!")
-
-        if self.pending.shape[0] > 0:
-            dd['pending'] = input_space.to_unit(self.pending)
-        else:
-            dd['pending'] = None
-
-        return dd
-
+            # definitely don't standardize the mean here. because the constraint value
+            # relative to 0 is important
+            # scaling is OK, but not by the variance -- that is messed up if you aren't
+            # standardizing the mean first (e.g. if your values are 1.11 and 1.12)
+            # but dividing by the max of the absolute value is good. it means after scaling,
+            # the biggest absolute value should be 1.
+            return self.standardize_variance(self.valid_values, use_max=True)
 
 
     def standardize_mean(self, y):
@@ -328,11 +305,14 @@ class Task(object):
         return y - mean
 
 
-    def standardize_variance(self, y):
+    def standardize_variance(self, y, use_max=False):
         if y.size == 0:
             return y
 
-        y_std  = y.std()
+        if use_max:
+            y_std = np.max(np.abs(y))
+        else:
+            y_std  = y.std()
 
         # some weird logic here:
         # first, check if std is 0. if so this indicated that all elements of y are the same
@@ -344,6 +324,7 @@ class Task(object):
         if y_std == 0:
             y_std = 1.0
 
+
         self.standardization_variance = y_std
 
         return y / y_std
@@ -353,8 +334,9 @@ class Task(object):
             return y
 
         if self.standardization_mean is None:
+            return y
             # return y  # if was never standardized, this means it is a constraint or something
-            raise Exception("values were never standardized")
+            # raise Exception("values were never standardized")
 
         return y + self.standardization_mean
 
@@ -364,7 +346,8 @@ class Task(object):
             return y # must do this before checking if standardization_variance is None
 
         if self.standardization_variance is None:
-            raise Exception("values were never standardized")
+            return y
+            # raise Exception("values were never standardized")
 
         return y * self.standardization_variance
 

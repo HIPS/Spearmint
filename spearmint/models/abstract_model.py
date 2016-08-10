@@ -184,6 +184,7 @@
 
 import ast
 import sys
+import random
 
 import numpy        as np
 import numpy.random as npr
@@ -218,19 +219,35 @@ class AbstractModel(object):
     def function_over_hypers(self, fun, *fun_args, **fun_kwargs):
         return function_over_hypers([self], fun, *fun_args, **fun_kwargs)
 
+    def function_over_hypers_subset(self, fun, subset, *fun_args, **fun_kwargs):
+        return function_over_hypers([self], fun, subset, *fun_args, **fun_kwargs)
+
+
+
+def function_over_hypers_single(models, fun, *fun_args, **fun_kwargs):
+    return function_over_hypers_subset(models, fun, 1, *fun_args, **fun_kwargs)
+def function_over_hypers(models, fun, *fun_args, **fun_kwargs):
+    return function_over_hypers_subset(models, fun, np.inf, *fun_args, **fun_kwargs)
 # Compute the function fun while averaging over the stored
 # hyperparameter samples of multiple models. If models have different
 # numbers of samples, use the first n samples of each model,
 # where n is the min number of samples over the models
-def function_over_hypers(models, fun, *fun_args, **fun_kwargs):
+
+def function_over_hypers_subset(models, fun, subset, *fun_args, **fun_kwargs):
 
     # The the minimum of the number of states over the different models
     min_num_states = reduce(min, map(lambda x: x.num_states, models), np.inf)
+
+    states = range(min_num_states)
+
+    # only average over a subset of the states
+    if subset < min_num_states:
+        states = random.sample(states, subset)
     
-    for i in xrange(min_num_states):
+    for i,state in enumerate(states):
 
         for model in models:
-            model.set_state(i)
+            model.set_state(state)
         
         result = fun(*fun_args, **fun_kwargs) # Evaluate the function
 
@@ -245,12 +262,18 @@ def function_over_hypers(models, fun, *fun_args, **fun_kwargs):
                 average = np.zeros(result.shape)
 
         if isTuple:
-            assert(len(result) == len(average))
+            if len(result) != len(average):
+                raise Exception("Result is %s, average is %s, lengths don't match" % (result, average))
             for j in xrange(len(average)):
-                assert(result[j].shape == average[j].shape)
+                if result[j].shape != average[j].shape:
+                    raise Exception("Result[%d] shape is %s, average[%d] shape is %s, shapes don't match" % (j, result[j].shape, j, average[j].shape))
                 average[j] += result[j]
         else:
-            assert(result.shape == average.shape)
+            if not isinstance(result, np.ndarray):
+                print result
+                raise Exception("Result is not numpy array: %s" % result)
+            if result.shape != average.shape:
+                raise Exception("Result is %s, shape %s, average is %s, shape %s, shapes don't match" % (result, result.shape, average, average.shape))
             average += result
     
     # Divide by numAveraged to get the average (right now we just have the sum)

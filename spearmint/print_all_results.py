@@ -185,21 +185,12 @@
 import os
 import sys
 import importlib
-import imp
-import pdb
-import numpy             as np
-import numpy.random      as npr
-import numpy.linalg      as npla
-import matplotlib        as mpl
-mpl.use('Agg')
-import matplotlib.pyplot as plt
 
 from spearmint.visualizations         import plots_2d
 from spearmint.utils.parsing          import parse_config_file
 from spearmint.utils.parsing          import parse_tasks_from_jobs
 from spearmint.utils.parsing          import repeat_experiment_name
 from spearmint.utils.parsing          import get_objectives_and_constraints
-from spearmint.utils.parsing          import DEFAULT_TASK_NAME
 from spearmint.utils.database.mongodb import MongoDB
 from spearmint.tasks.input_space      import InputSpace
 from spearmint.tasks.input_space      import paramify_no_types
@@ -208,7 +199,7 @@ from spearmint.main                   import load_jobs
 def main(expt_dir, repeat=-1):
 
     options         = parse_config_file(expt_dir, 'config.json')
-    experiment_name = options["experiment-name"]
+    experiment_name = options["experiment_name"]
 
     if repeat > 0:
         experiment_name = repeat_experiment_name(experiment_name, repeat)
@@ -221,19 +212,26 @@ def main(expt_dir, repeat=-1):
     hypers          = db.load(experiment_name, 'hypers')
     tasks           = parse_tasks_from_jobs(jobs, experiment_name, options, input_space)
 
-    for task_name, task in tasks.iteritems():
-
-        # print 'Printing results for task %s' % task_name
-
-        for i in xrange(len(task.values)):
-
-            print 'Iteration %d' % (i+1)
-            input_space.paramify_and_print(task.inputs[i], left_indent=0)
+    for job in jobs:
             
-            print '%s: %s' % (task_name, task.values[i])
+                
+        if job['status'] == 'complete':
+            print 'Job %d' % job['id']
+
+            input_space.print_params(job['params'], left_indent=0)
+            for task,val in job['values'].iteritems():
+                print '%s: %s' % (task,val)
 
             print ''
-            print ''
+
+    # for task_name, task in tasks.iteritems():
+    #     # print 'Printing results for task %s' % task_name
+    #     for i in xrange(len(task.values)):
+    #         print 'Iteration %d' % (i+1)
+    #         input_space.paramify_and_print(task.inputs[i], left_indent=0)
+    #         print '%s: %s' % (task_name, task.values[i])
+    #         print ''
+    #         print ''
 
 if __name__ == '__main__':
     main(*sys.argv[1:])

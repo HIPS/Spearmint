@@ -196,6 +196,7 @@ from ..utils           import param as hyperparameter_utils
 
 
 class SliceSampler(AbstractSampler):
+
     def logprob(self, x, model):
         hyperparameter_utils.set_params_from_array(self.params, x)
         lp = 0.0
@@ -218,9 +219,10 @@ class SliceSampler(AbstractSampler):
 
         return lp
 
+        
     def sample(self, model):
         params_array = hyperparameter_utils.params_to_array(self.params)
-        for i in xrange(self.thinning + 1):
+        for i in xrange(self.sampler_options.get('thinning', 0) + 1):
             
             # make slice sampling safe against non-positive definite errors
             choleskyAttemptsRemaining=3

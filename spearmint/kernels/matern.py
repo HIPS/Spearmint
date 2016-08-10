@@ -235,4 +235,5 @@ class Matern52(AbstractKernel):
         grad_r2 = (5.0/6.0)*np.exp(-SQRT_5*r)*(1 + SQRT_5*r)
 
         return grad_r2[:,:,np.newaxis] * kernel_utils.grad_dist2(self.ls.value, inputs_1, inputs_2)
-
+        # ? result is num inputs_1 by num inputs_2 by d 
+        # by num inputs_1 I mean inputs_1.shape[0]

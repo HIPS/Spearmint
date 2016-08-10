@@ -192,11 +192,11 @@ from .abstract_model          import AbstractModel
 from ..utils.param            import Param as Hyperparameter
 import spearmint.kernels
 from ..kernels                import *
-from ..sampling.slice_sampler import SliceSampler
+from ..sampling               import *
 from ..utils                  import priors
 from ..                       import transformations
 from ..transformations        import Transformer   
-
+from ..transformations        import SimpleTransformer
 
 # try:
 #     module = sys.modules['__main__'].__file__
@@ -206,40 +206,19 @@ from ..transformations        import Transformer
 #     print 'Not running from main.'
 
 
-OPTION_DEFAULTS = {
-    'verbose'           : False,
-    'mcmc_diagnostics'  : False,
-    'mcmc_iters'        : 10,
-    'burnin'            : 20,
-    'thinning'          : 0,
-    'num_fantasies'     : 1,
-    'caching'           : True,
-    'max_cache_mb'      : 256,
-    'likelihood'        : 'gaussian',
-    'kernel'            : 'Matern52',
-    'stability_jitter'  : 1e-6,
-    'fit_mean'          : True,
-    'fit_amp2'          : True,
-    'transformations'   : [],
-    'priors'            : [],
-    'initial_ls'        : 0.1,
-    'initial_mean'      : 0.0, # initial values of the hypers
-    'initial_amp2'      : 1.0,
-    'initial_noise'     : 0.0001
-}
 
 class GP(AbstractModel):
     
     def __init__(self, num_dims, **options):
         
-        opts = OPTION_DEFAULTS.copy()
-        opts.update(options)
-        if hasattr(self, 'options'):
-            opts.update(self.options)
+        # opts = OPTION_DEFAULTS.copy()
+        # opts.update(options)
+        # if hasattr(self, 'options'):
+            # opts.update(self.options)
         # This is a bit of a mess. Basically to make it work with the GPClassifer --
         # but yes I know the GP shouldn't have code for the sake of those who inherit from it
         # TODO -- clean this up
-        self.options = opts
+        self.options = options
 
         self.num_dims = num_dims
 
@@ -292,7 +271,7 @@ class GP(AbstractModel):
     def _prepare_cache(self):
         self._cache_list = list()
 
-        inputs_hash = hash(self.inputs.tostring())
+        # inputs_hash = hash(self.inputs.tostring())
         for i in xrange(self.num_states):
             self.set_state(i)
             chol  = spla.cholesky(self.kernel.cov(self.inputs), lower=True)
@@ -318,13 +297,17 @@ class GP(AbstractModel):
 
         # these should be in the right order because the json was parsed with an orderedDict
         # could make this more robust by using a list instead...
-        transformer = Transformer(self.num_dims)
+
+        # transformer = Transformer(self.num_dims)
+        transformer = SimpleTransformer(self.num_dims)
 
         for trans in self.options['transformations']:
             assert len(trans) == 1 # this is the convention-- a list of length-1 dicts
             trans_class = trans.keys()[0]
             trans_options = trans.values()[0]
+
             T = getattr(transformations,trans_class)(self.num_dims, **trans_options)
+            
             transformer.add_layer(T)
             self.params.update({param.name:param for param in T.hypers})
         # Default is BetaWarp (set in main.py)
@@ -332,6 +315,9 @@ class GP(AbstractModel):
             # beta_warp = BetaWarp(self.num_dims)
             # transformer.add_layer(beta_warp)
             # self.params.update({param.name:param} for param in beta_warp.hypers)
+
+        # only used in weird case of PESC/finite basis/"depends on"
+        self.transformer = transformer
 
         # Build the component kernels
         # length_scale_prior = priors.Scale(priors.Beta(1.5, 5.0), 10.0)
@@ -344,7 +330,7 @@ class GP(AbstractModel):
         if self.options['initial_ls'] is not None and isinstance(self.options['initial_ls'], float):
             initial_ls_value = np.ones(self.num_dims) * self.options['initial_ls']
         else:
-            initial_ls_value = self.options['initial_ls']
+            initial_ls_value = np.array(self.options['initial_ls'])
 
         input_kernel             = self.input_kernel_class(self.num_dims, prior=length_scale_prior, value=initial_ls_value)
         self.scaled_input_kernel = Scale(input_kernel, value=self.options['initial_amp2'])
@@ -368,25 +354,30 @@ class GP(AbstractModel):
 
         self.params['ls'] = input_kernel.hypers
 
-        # Slice sample all params with compwise=True, except for mean,amp2,(noise) handled below
-        self._samplers.append(SliceSampler(*self.params.values(), compwise=True, thinning=self.options['thinning']))
+        toSample = self.params.values() # we don't want to copy the params, but we want to copy the list.
 
         amp2 = self.scaled_input_kernel.hypers
-        self.params['amp2'] = amp2 # stick it in params because PESC examines this
-        # i guess it doesn't really matter if it is in params, what matters it toSample
 
-        toSample = list()
+        # PESC examines 'params' so put them here even if not sampled
+        self.params['amp2'] = amp2
+        self.params['mean'] = self.mean
+        if not self.noiseless:
+            self.params['noise'] = noise_kernel.noise
+
+        # doesn't really matter if it is in params, what matters is toSample
+
         if self.options['fit_amp2']:
             toSample.append(amp2)
         if self.options['fit_mean']:
-            self.params['mean'] = self.mean
             toSample.append(self.mean)        
-        if not self.noiseless:
-            self.params['noise'] = noise_kernel.noise
+        if not self.noiseless and self.options['fit_noise']:
             toSample.append(noise_kernel.noise)
+
+        sampler_class = getattr(spearmint.sampling, self.options['sampler'])
+        self._samplers.append(sampler_class(*toSample, compwise=True, thinning=self.options['thinning'], opt=self.options['nlopt_method_no_grad']))
         
-        if len(toSample) > 0:
-            self._samplers.append(SliceSampler(*toSample, compwise=False, thinning=self.options['thinning']))
+        # if len(toSample) > 0:
+            # self._samplers.append(sampler_class(*toSample, compwise=False, thinning=self.options['thinning']))
        
     def _burn_samples(self, num_samples):
         if num_samples == 0:
@@ -604,8 +595,8 @@ class GP(AbstractModel):
         inputs = self.inputs
         values = self.values
 
-        if pred.shape[1] != self.num_dims:
-            raise Exception("Dimensionality of test points is %d but dimensionality given at init time is %d." % (pred.shape[1], self.num_dims))
+        # if pred.shape[1] != self.num_dims:
+            # raise Exception("Dimensionality of test points is %d but dimensionality given at init time is %d." % (pred.shape[1], self.num_dims))
 
         # Special case if there is no data yet --> predict from the prior
         if not self.has_data:

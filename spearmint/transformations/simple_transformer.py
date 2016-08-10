@@ -182,41 +182,68 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
-
+import copy
 import numpy as np
 
-from .abstract_kernel import AbstractKernel
-from ..utils          import priors
-from ..utils.param    import Param as Hyperparameter
+from collections import defaultdict
+
+from .abstract_transformation import AbstractTransformation
+
+class SimpleTransformer(object):
+
+    def __init__(self, num_dims):
+        self.num_dims_input  = num_dims
+        self.num_dims_output = num_dims
+
+        self.transformations = []
+
+    def add_layer(self, transformation):
+
+        self.transformations.append(transformation)
+
+        if len(self.transformations) == 1:
+            if self.transformations[-1].input_num_dims() != self.num_dims_input:
+                raise Exception("Dimensions do not match: %d != %d" % (self.transformations[-1].output_num_dims(), self.num_dims_input))
+        if len(self.transformations) >= 2:
+            if self.transformations[-2].output_num_dims() != self.transformations[-1].num_dims_input:
+                raise Exception("Dimensions do not match")
+
+        self.num_dims_output = transformation.output_num_dims()
 
 
-class Noise(AbstractKernel):
-    def __init__(self, num_dims, name='noise', prior=None, value=1e-6):
-        self.name     = name
-        self.num_dims = num_dims
+    # accepts an array of size num_inputs by self.num_dims_input
+    # returns an array of size num_inputs by self.num_dims_output
+    def forward_pass(self, inputs):
 
-        self.noise = Hyperparameter(
-            initial_value = value,
-            prior = priors.ProductOfPriors((priors.Horseshoe(0.1), priors.Tophat(0, 1.0))) if prior is None else prior,
-            # prior         = priors.NonNegative(priors.Horseshoe(0.1)) if prior is None else prior,
-            # prior         = priors.Exponential(mean=0.01) if prior is None else prior,
-            # prior         = priors.Scale(priors.Beta(1.0, 5.0), 2.0) if prior is None else prior,
-            name          = name
-        )
+        # Everything should work if there is no data
+        self._inputs = inputs
+        if inputs.size == 0:
+            return inputs
 
-    @property
-    def hypers(self):
-        return self.noise
+        # If there are no layers, do nothing
+        if not self.transformations:
+            return inputs
 
-    def cov(self, inputs):
-        return np.diag(self.noise.value*np.ones(inputs.shape[0]))
+        x = copy.copy(inputs)
+        for t in self.transformations:
+            x = t.forward_pass(x)
 
-    def diag_cov(self, inputs):
-        return self.noise.value*np.ones(inputs.shape[0])
+        return x
 
-    def cross_cov(self, inputs_1, inputs_2):
-        return np.zeros((inputs_1.shape[0],inputs_2.shape[0]))
+    # accepts an array of size ... by self.num_dims_output
+    # returns an array of size ... by self.num_dims_input
+    def backward_pass(self, V):
+        
+        if self._inputs.size == 0:
+            return V
 
-    def cross_cov_grad_data(self, inputs_1, inputs_2):
-       return np.zeros((inputs_1.shape[0],inputs_2.shape[0],self.num_dims))
+        if not self.transformations:
+            return V
 
+        for t in self.transformations[::-1]: # go through them backwards
+            V = t.backward_pass(V) # no need to multiple because each transformer does that
+
+        return V
+
+        
+        

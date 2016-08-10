@@ -269,15 +269,14 @@ class InputSpace(object):
         self.num_dims = num_dims
         self.cardinality = cardinality
 
-    def paramify_and_print(self, data_vector, left_indent=0, indent_top_row=True):
-        params = self.paramify(data_vector)
+    def print_params(self, params, left_indent=0, indent_top_row=True, print_func=logging.info):
         indentation = ' '*left_indent
         
         top_row = 'NAME          TYPE       VALUE'
         if indent_top_row:
             top_row = indentation + top_row
-        logging.info(top_row)
-        logging.info(indentation + '----          ----       -----')
+        print_func(top_row)
+        print_func(indentation + '----          ----       -----')
 
         for param_name, param in params.iteritems():
 
@@ -288,10 +287,13 @@ class InputSpace(object):
 
             for i in xrange(len(param['values'])):
                 if i == 0:
-                    logging.info(format_str % (indentation, param_name, param['type'], param['values'][i]))
+                    print_func(format_str % (indentation, param_name, param['type'], param['values'][i]))
                 else:
-                    logging.info(format_str % (indentation, '', '',                    param['values'][i]))
+                    print_func(format_str % (indentation, '', '',                    param['values'][i]))
 
+    def paramify_and_print(self, data_vector, **kwargs):
+        params = self.paramify(data_vector)
+        self.print_params(params, **kwargs)
 
     # Converts a vector in input space to the corresponding dict of params
     def paramify(self, data_vector):
@@ -314,6 +316,13 @@ class InputSpace(object):
                 raise Exception('Unknown parameter type.')
             
         return params
+
+    # get the list of indices from the names here
+    def get_indices(self, param_names):
+        inds = np.zeros(0, dtype=int)
+        for param_name in param_names:
+            inds = np.append(inds, self.variables_meta[param_name]['indices'])
+        return inds
 
     # Converts a dict of params to the corresponding vector in puts space
     def vectorify(self, params):

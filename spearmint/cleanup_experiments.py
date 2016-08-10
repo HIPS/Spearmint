@@ -2,6 +2,9 @@ import sys
 from spearmint import cleanup
 
 def main(expt_dir, repeat, repeat_start=0):
+
+    raw_input("Are you sure? Press enter to continue.")
+
     repeat = int(repeat)
     repeat_start = int(repeat_start)
 

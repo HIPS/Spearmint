@@ -1,0 +1,7 @@
+{
+    "base config file"  : "$LOCATION_OF_THIS_FILE$/../base_config.json",
+    "experiment-name"   : "toy-new-fast-gamma-0.1",
+    "fast-updates"      : "True",
+    "thoughtfulness"    : 0.1
+}
+

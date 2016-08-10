@@ -197,13 +197,15 @@ mpl.rcParams['pdf.use14corefonts'] = True
 mpl.rcParams['axes.unicode_minus'] = False
 
 import matplotlib.pyplot as plt
+plt.rc('text', usetex=True)
+
 
 from spearmint.visualizations         import plots_2d
 from spearmint.utils.parsing          import parse_config_file
 from spearmint.utils.parsing          import parse_tasks_from_jobs
 from spearmint.utils.parsing          import repeat_experiment_name
 from spearmint.utils.parsing          import get_objectives_and_constraints
-from spearmint.utils.parsing          import DEFAULT_TASK_NAME
+from spearmint.utils.parsing          import DEFAULTS
 from spearmint.utils.database.mongodb import MongoDB
 from spearmint.tasks.input_space      import InputSpace
 from spearmint.tasks.input_space      import paramify_no_types
@@ -211,7 +213,7 @@ from spearmint.main                   import load_jobs
 
 
 # Returns the violation value if the constraints are violated, else the objective
-def true_func(stored, module, violation_value=np.inf, objective=DEFAULT_TASK_NAME, constraints=[]):
+def true_func(stored, module, violation_value=np.inf, constraint_tol=0.0, objective=DEFAULTS["task_name"], constraints=[]):
     params = stored['params']
 
     # if we don't actually know the true objective, just return what we think is the best
@@ -233,9 +235,9 @@ def true_func(stored, module, violation_value=np.inf, objective=DEFAULT_TASK_NAM
         val = output[objective]
 
     for c in constraints:
-        if output[c] < 0:
+        if output[c] < -constraint_tol:
             print 'Violation value of %f for constraint %s' % (output[c], c)
-            print str(paramify_no_types(params))
+            # print str(paramify_no_types(params))
             return violation_value
 
     # if the module defines the true solution value, then use the gap. otherwise don't
@@ -248,22 +250,36 @@ def main(dirs,
     average         = "mean",
     log_scale       = False,
     violation_value = 1.,
+    constraint_tol  = 0.,
     make_dist_plot  = False,
     mainfile        = None,
     stretch_x       = False,
     task_comp_x     = None,
+    plot_wall_time  = False,
+    bin_size        = 1.0,
+    plot_separate   = False,
     labels          = None,
     y_axis_label    = None,
-    x_axis_label    = None,
-    retro           = False):
+    x_axis_label    = None):
 
     # Create the figure that plots utility gap
     fig = dict()
     ax  = dict()
 
+    # averaging function
+    if average == "mean":
+        avg = np.mean
+    elif average == "median":
+        avg = np.median
+    else:
+        raise Exception("Unknown average %s" % average)
+
+
     fig['err'] = plt.figure()
     ax['err'] = fig['err'].add_subplot(1,1,1)
-    if x_axis_label:
+    if plot_wall_time:
+        ax['err'].set_xlabel("wall time (min)", size=25)
+    elif x_axis_label:
         ax['err'].set_xlabel(x_axis_label, size=25)
     else:
         ax['err'].set_xlabel('Number of function evaluations', size=25)
@@ -284,12 +300,12 @@ def main(dirs,
         ax['dist'].set_ylabel('$\ell_2$-distance', size=25)
     ax['dist'].tick_params(axis='both', which='major', labelsize=20)
 
-    db_document_name = 'recommendations'+('-retro998' if retro else '')
+    db_document_name = 'recommendations'
 
     acq_names = list()
     for expt_dir in dirs:
         options         = parse_config_file(expt_dir, 'config.json')
-        experiment_name = options["experiment-name"]
+        experiment_name = options["experiment_name"]
         input_space     = InputSpace(options["variables"])
         chooser_module  = importlib.import_module('spearmint.choosers.' + options['chooser'])
         chooser         = chooser_module.init(input_space, options)
@@ -298,7 +314,7 @@ def main(dirs,
         hypers          = db.load(experiment_name, 'hypers')
         tasks           = parse_tasks_from_jobs(jobs, experiment_name, options, input_space)
 
-        if rec_type == "model":
+        if rec_type  == "model":
             if mainfile is None:
                 main_file = options['main_file']
             else:
@@ -365,10 +381,23 @@ def main(dirs,
 
             iters = range(n_iter)
 
-            print 'Found %d iterations' % len(recs)
-            values = [true_func(rec, module, violation_value, obj, con) for rec in recs]
+            if plot_wall_time:
+                if task_comp_x:
+                    raise Exception("Do not use plot wall_time with task_x")
+                iters = [rec['total_elapsed_time']/60.0 for rec in recs]
+                iters = iters[:n_iter]
+                iters = np.array(iters, dtype=float)
 
-            if rec_type != "model":
+            print 'Found %d iterations' % len(recs)
+
+            if rec_type == "model":
+                values = [true_func(rec, module, violation_value, constraint_tol, obj, con) for rec in recs]
+
+                if log_scale:
+                    ax['err'].plot(iters, map(np.log10,values))
+                else:
+                    ax['err'].plot(iters, values)
+            else:
                 if rec_type == "observations":
                     observations = [x['obj_o'] for x in recs]
                 elif rec_type == "mixed":
@@ -379,18 +408,13 @@ def main(dirs,
                 for i in xrange(len(observations)):
                     if observations[i] is None or np.isnan(observations[i]):
                         observations[i] = violation_value
-                print observations
-                print len(observations)
+                # print observations
+                # print len(observations)
 
                 if log_scale:
                     ax['err'].plot(iters, np.log10(observations))
                 else:
                     ax['err'].plot(iters, observations)
-            else:
-                if log_scale:
-                    ax['err'].plot(iters, np.log10(values))
-                else:
-                    ax['err'].plot(iters, values)
 
             if make_dist_plot:
                 distances = [params_norm(rec['params'], module.true_sol()) for rec in recs]
@@ -399,9 +423,14 @@ def main(dirs,
                 else:
                     ax['dist'].plot(iters, distances)
         else:
+             # MULTIPLE REPEATS
             repeat_recs = [db.load(repeat_experiment_name(experiment_name,j),db_document_name) for j in xrange(n_repeat)]
             if None in repeat_recs:
-                raise Exception("Could not load %d experiments with name %s" % (n_repeat, experiment_name))
+                for i, repeat_rec in enumerate(repeat_recs):
+                    if repeat_rec is None:
+                        print 'Could not load experiment %s repeat %d' % (experiment_name, i)
+                print 'Exiting...'
+                return
 
             if task_comp_x:
                 # only include recommendations when you finish a particular task
@@ -423,83 +452,167 @@ def main(dirs,
                     new_repeat_recs.append(new_recs)
 
                 repeat_recs = new_repeat_recs
-
-
+            
             n_iter_each = map(len, repeat_recs)
-            n_iter      = reduce(min, n_iter_each, np.inf)
-            if n_iter_spec is None:
-                print 'Found %d repeats with at least %d iterations' % (n_repeat, n_iter)
-                print {i:n_iter_each[i] for i in xrange(n_repeat)}
-            elif n_iter < n_iter_spec:
-                print 'You specified %d iterations but there are only %d available... so plotting %d' % (n_iter_spec, n_iter, n_iter)
-            else:
-                n_iter = n_iter_spec
-                print 'Plotting %d iterations' % n_iter
+            if plot_wall_time:
+                """ do everything separately from here if plotting wall time
+                here is what we do... we can't have a square array because 
+                we don't want to take the minimum number of iterations... 
+                we want to take ALL iterations for each repeat, and this number
+                may be different for different repeats.
+                so we store all times/values in a list of arrays
+                then we chop things up into bins
+                """
+                if rec_type != "model":
+                    values      = list()
+                    wall_times  = list()
+                    for j in xrange(n_repeat):  # loop over repeated experiments
 
-            iters = range(n_iter)
+                        wall_times.append( np.array([ repeat_recs[j][i]['total_elapsed_time']/60.0 for i in xrange(n_iter_each[j]) ]))
 
-
-            if rec_type != "model":
-                values      = np.zeros((n_iter, n_repeat))
-                for j in xrange(n_repeat):  # loop over repeated experiments
-                    for i in iters:      # loop over iterations
                         if rec_type == "observations":
-                            values[i,j] = repeat_recs[j][i]['obj_o']
+                            values.append([ repeat_recs[j][i]['obj_o'] for i in xrange(n_iter_each[j])])
                         elif rec_type == "mixed":
-                            values[i,j] = repeat_recs[j][i]['obj_om']
+                            values.append([ repeat_recs[j][i]['obj_om'] for i in xrange(n_iter_each[j])])
                         else:
                             raise Exception("unknown rec type")
-                        if values[i,j] is None or np.isnan(values[i,j]):
-                            values[i,j] = violation_value
+                            
+                        for i in xrange(n_iter_each[j]):
+                            if values[-1][i] is None or np.isnan(values[-1][i]):
+                                values[-1][i] = violation_value
 
-                print values
+                        values[-1] = np.array(values[-1])
 
-            else:
-                values      = np.zeros((n_iter, n_repeat))
-                distances   = np.zeros((n_iter, n_repeat))
-                for j in xrange(n_repeat):  # loop over repeated experiments
-                    for i in iters:      # loop over iterations
-                        val = true_func(repeat_recs[j][i], module, None, obj, con)
-                        if val is None:
-                            values[i,j] = violation_value
-                            print 'Violation with params %s at repeat %d iter %d' % (repeat_recs[j][i]['params'], j, i)
+                    # print values
+
+                else: # if plot wall tiem but using model
+                    values     = list()
+                    wall_times = list()
+                    for j in xrange(n_repeat):  # loop over repeated experiments
+
+                        # for this repeat, get all wall times 
+                        wall_times.append( np.array([ repeat_recs[j][i]['total_elapsed_time']/60.0 for i in xrange(n_iter_each[j]) ]))
+                        
+                        values_j = np.zeros(n_iter_each[j])
+                        for i in xrange(n_iter_each[j]):      # loop over iterations
+                            val = true_func(repeat_recs[j][i], module, None, constraint_tol, obj, con)
+                            if val is None or np.isnan(val): #set to violation value here so we can print out this info...
+                                values_j[i] = violation_value
+                                print 'Violation with params %s at repeat %d iter %d' % (paramify_no_types(repeat_recs[j][i]['params']), j, i)
+                            else:
+                                values_j[i] = val
+                        values.append(values_j)
+
+                # change the data structure to be time bins and include everything in
+                # those time bins across repeats
+                end_times = map(max,wall_times)
+                for j in xrange(n_repeat):
+                    print 'end time for repeat %d: %f' % (j, end_times[j])
+                iters = np.arange(0.0,np.round(max(end_times)), bin_size)
+                new_values = list()
+                for i,timestep in enumerate(iters):
+                    # print 'Creating wall time bin from %f to %f. (%d/%d)' % (i, i+bin_size, i, len(iters))
+                    new_value = list()
+                    for j in xrange(n_repeat):
+                        new_value = np.append(new_value, values[j][np.logical_and(wall_times[j] >= timestep, wall_times[j] < timestep+bin_size)].flatten())
+                    # if a time bin is empty across all repeats:
+                    if len(new_value) == 0:
+                        if i == 0:
+                            new_value = [violation_value]
                         else:
-                            values[i,j] = val
+                            new_value = new_values[-1]
+                    new_values.append(new_value)
+                values = new_values
 
-                        if make_dist_plot:
-                            distances[i,j] = params_norm(repeat_recs[j][i]['params'], module.true_sol()) 
-                
+                # make the first value equal to the violation value (optional)        
+                iters = np.append(iters, max(iters)+bin_size)
+                values.insert(0, np.array([violation_value]))
 
-            # averaging function
-            if average == "mean":
-                avg = np.mean
-            elif average == "median":
-                avg = np.median
-            else:
-                raise Exception("Unknown average %s" % average)
+                # Average over the repeated experiments
+                average_values = map(avg, values)
+                errorbars = bootstrap_errorbars(values, log=log_scale, avg=avg)
+                # plt.yscale('log', nonposy='clip')
 
-            # Average over the repeated experiments
-            average_values = avg(values, axis=1)
-            errorbars = bootstrap_errorbars(values, log=log_scale, avg=avg)
-            # plt.yscale('log', nonposy='clip')
-
-            if stretch_x:
-                fctr = float(n_iter_spec) / float(n_iter)
-                iters = np.array(iters) * fctr
-                print 'Stretching x axis by a factor of %f' % fctr
-
-            if log_scale:
-                ax['err'].errorbar(iters, np.log10(average_values), yerr=errorbars)
-            else:
-                ax['err'].errorbar(iters, average_values, yerr=errorbars)
-
-            if make_dist_plot:
-                average_dist = avg(distances, axis=1)
-                errorbars_dist = bootstrap_errorbars(distances, log=log_scale, avg=avg)
                 if log_scale:
-                    ax['dist'].errorbar(iters, np.log10(average_dist), yerr=errorbars_dist)
+                    ax['err'].errorbar(iters, np.log10(average_values), yerr=errorbars)
                 else:
-                    ax['dist'].errorbar(iters, average_dist, yerr=errorbars_dist)
+                    ax['err'].errorbar(iters, average_values, yerr=errorbars)
+
+            else:
+                # NOT WALL TIME
+
+                n_iter      = reduce(min, n_iter_each, np.inf)
+                if n_iter_spec is None:
+                    print 'Found %d repeats with at least %d iterations' % (n_repeat, n_iter)
+                    print {i:n_iter_each[i] for i in xrange(n_repeat)}
+                elif n_iter < n_iter_spec:
+                    print 'You specified %d iterations but there are only %d available... so plotting %d' % (n_iter_spec, n_iter, n_iter)
+                else:
+                    n_iter = n_iter_spec
+                    print 'Plotting %d iterations' % n_iter
+
+                iters = range(n_iter)
+
+                if rec_type != "model":
+                    values      = np.zeros((n_iter, n_repeat))
+                    for j in xrange(n_repeat):  # loop over repeated experiments
+                        for i in iters[j]:      # loop over iterations
+                            if rec_type == "observations":
+                                values[i,j] = repeat_recs[j][i]['obj_o']
+                            elif rec_type == "mixed":
+                                values[i,j] = repeat_recs[j][i]['obj_om']
+                            else:
+                                raise Exception("unknown rec type")
+                            if values[i,j] is None or np.isnan(values[i,j]):
+                                values[i,j] = violation_value
+
+                    print values
+
+                else:
+                    values      = np.zeros((n_iter, n_repeat))
+                    distances   = np.zeros((n_iter, n_repeat))
+                    for j in xrange(n_repeat):  # loop over repeated experiments
+                        for i in iters:      # loop over iterations 
+                            val = true_func(repeat_recs[j][i], module, None, constraint_tol, obj, con)
+                            if val is None: #set to violation value here so we can print out this info...
+                                values[i,j] = violation_value
+                                print 'Violation with params %s at repeat %d iter %d' % (paramify_no_types(repeat_recs[j][i]['params']), j, i)
+                            else:
+                                values[i,j] = val
+
+                            if make_dist_plot:
+                                distances[i,j] = params_norm(repeat_recs[j][i]['params'], module.true_sol()) 
+
+
+                if plot_separate:
+                    if log_scale:
+                        ax['err'].plot(iters, np.log10(values))
+                    else:
+                        ax['err'].plot(iters, values)
+
+                else:
+                    # Average over the repeated experiments
+                    average_values = map(avg, values)
+                    errorbars = bootstrap_errorbars(values, log=log_scale, avg=avg)
+                    # plt.yscale('log', nonposy='clip')
+
+                    if stretch_x:
+                        fctr = float(n_iter_spec) / float(n_iter)
+                        iters = np.array(iters) * fctr
+                        print 'Stretching x axis by a factor of %f' % fctr                
+
+                    if log_scale:
+                        ax['err'].errorbar(iters, np.log10(average_values), yerr=errorbars)
+                    else:
+                        ax['err'].errorbar(iters, average_values, yerr=errorbars)
+
+                    if make_dist_plot:
+                        average_dist = map(avg, distances)
+                        errorbars_dist = bootstrap_errorbars(distances, log=log_scale, avg=avg)
+                        if log_scale:
+                            ax['dist'].errorbar(iters, np.log10(average_dist), yerr=errorbars_dist)
+                        else:
+                            ax['dist'].errorbar(iters, average_dist, yerr=errorbars_dist)
 
         acq_names.append(options["tasks"].values()[0]["acquisition"])
         if acq_names[-1] == 'PES':
@@ -508,23 +621,34 @@ def main(dirs,
             acq_names[-1] = 'EIC'
 
     if labels:
-        ax['err'].legend(labels.split(';'), fontsize=20)
+        ax['err'].legend(labels.split(';'), fontsize=16, loc='lower left')
         ax['dist'].legend(labels.split(';'), fontsize=20)
-    if len(acq_names) > 1:
+    elif len(acq_names) > 1:
         ax['err'].legend(acq_names, fontsize=20)
         ax['dist'].legend(acq_names, fontsize=20)
 
-    # save it in the last directory...
+    # save it in the last directory... (if there are multiple directories)
+    if not plot_wall_time:
+        if n_repeat >= 0:
+            print 'Made a plot with %d repeats and %d iterations' % (n_repeat, n_iter)
+        else:
+            print 'Made a plot with %d iterations' % (n_iter)
+    else:
+        if n_repeat >= 0:
+            print 'Made a plot with %d repeats and %f minutes' % (n_repeat, max(iters))
+        else:
+            print 'Made a plot with %f minutes' % (max(iters))
     
-
     file_prefix = '%s_' % average if n_repeat > 0 else ''
+    file_postfix = '_wall_time' if plot_wall_time else ''
     fig['err'].tight_layout()
-    figname = os.path.join(plots_dir, '%serror.pdf' % file_prefix)
-    fig['err'].savefig(figname)
+    figname = os.path.join(plots_dir, '%serror%s' % (file_prefix, file_postfix))
+    fig['err'].savefig(figname + '.pdf')
+    fig['err'].savefig(figname + '.svg')
     print 'Saved to %s' % figname
     if make_dist_plot:
         fig['dist'].tight_layout()
-        figname_dist = os.path.join(plots_dir, '%sl2_distance.pdf' % file_prefix)
+        figname_dist = os.path.join(plots_dir, '%sl2_distance%s.pdf' % (file_prefix, file_postfix))
         fig['dist'].savefig(figname_dist)
         print 'Saved to %s' % figname_dist
 
@@ -546,23 +670,37 @@ def params_norm(x, y):
 # compute error bars with the bootstrap
 # if log=True, we compute the standard deviation of the log values
 def bootstrap_errorbars(X, M=1000, log=False, avg=np.mean):
-    boots = np.zeros((X.shape[0], M))
-    for k in xrange(M):
-        # sample n_repeat curves with replacement from the originals
-        resampled_X = X[:,npr.randint(0, X.shape[1],size=X.shape[1])]
-        boots[:,k] = avg(resampled_X, axis=1)
-    if log:
-        boots = np.log10(boots)
-    errorbars = np.std(boots, axis=1)
+    # boots = np.zeros((X.shape[0], M))
+    # for k in xrange(M):
+    #     # sample n_repeat curves with replacement from the originals
+    #     resampled_X = X[:,npr.randint(0, X.shape[1],size=X.shape[1])]
+    #     boots[:,k] = map(avg, resampled_X)
+    # if log:
+    #     boots = np.log10(boots)
+
+
+    boots = list()
+    for i,x in enumerate(X):
+        boots_i = np.zeros(M)
+        if np.array(x).size>1: # if there's only one or 0 values, errorbar=0
+            for m in xrange(M):
+                resampled_x = x[npr.randint(0, x.size,size=x.size)]
+                boots_i[m] = avg(resampled_x)
+            if log:
+                boots_i = np.log10(boots_i)
+        boots.append(boots_i)
+    boots = np.array(boots)
+    errorbars = map(np.std, boots)
     return errorbars
 
 # Usage:
 # python progress_curve.py dir1 [dir2] ... [dirN] [repeat]
 if __name__ == '__main__':
     
-    option_names = ['n_repeat', 'average', 'rec_type', 'log_scale',\
-    'n_iter_spec', 'violation_value', 'make_dist_plot', 'mainfile',\
-    'stretch_x', 'task_comp_x', 'labels', "y_axis_label", 'x_axis_label', 'retro']
+    option_names = ['n_repeat', 'average', 'rec_type', 'log_scale', \
+    'n_iter_spec',  'violation_value', 'constraint_tol', \
+    'make_dist_plot', 'mainfile', 'plot_wall_time', 'plot_separate', 'bin_size',   \
+    'stretch_x', 'task_comp_x', 'labels', "y_axis_label", 'x_axis_label']
 
     parser = optparse.OptionParser(usage="usage: %prog [options] dir1 dir2")
 
@@ -577,14 +715,15 @@ if __name__ == '__main__':
                       dest="average")
     parser.add_option("--logscale", action="store_true", dest="log_scale",
                       help="Whether to plot the y axis on a log scale.")
-    parser.add_option("--retro", action="store_true", dest="retro",
-                      help="Load recommandations-retro instead of recommendations.")
     parser.add_option("--iter", dest="n_iter_spec",
                       help="Uesd to specify a certain number of iterations to plot.",
                       type="int", default=None)
     parser.add_option("--violation-value", dest="violation_value",
                       help="The penalty value for violating the constraints.",
                       type="float", default=1.0)
+    parser.add_option("--constraint-tol", dest="constraint_tol",
+                      help="You can violate the constraint by this amount and not be penalized the violation value.",
+                      type="float", default=0.0)
     parser.add_option("--make_dist_plot", action="store_true",
                       help="Whether to also make a plot of the L2 distance from the true solution.")
     parser.add_option("--mainfile", dest="mainfile",
@@ -595,6 +734,15 @@ if __name__ == '__main__':
     parser.add_option("--task_x", dest="task_comp_x",
                       help="A particular task whose num complete will make up the x-axis of the plot.",
                       type="string", default=None)
+    parser.add_option("--wall-time", action="store_true",
+                      help="Plot wall time on the x axis.",
+                      dest="plot_wall_time")
+    parser.add_option("--bin-size", dest="bin_size",
+                      help="Only used when plot_wall_time is on and n_repeat > 1.",
+                      type="float", default=1.0)
+    parser.add_option("--separate", action="store_true",
+                      help="Plot repeated experiments separately instead of averaged with error bars.",
+                      dest="plot_separate")
     parser.add_option("--labels", dest="labels",
                       help="For non-default legend labels on the curves. If >1, separate with SEMICOLON.",
                       type="string", default=None)

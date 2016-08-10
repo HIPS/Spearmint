@@ -198,6 +198,8 @@ import logging
 
 import numpy as np
 
+# np.random.seed(1)
+
 try: import simplejson as json
 except ImportError: import json
 
@@ -213,48 +215,35 @@ from spearmint.utils.parsing          import repeat_output_dir
 from spearmint.resources.resource     import print_resources_status
 from spearmint.tasks.task             import print_tasks_status
 
-
 logLevel = logging.INFO
 logFormatter = logging.Formatter("%(message)s")
 logging.basicConfig(level=logLevel,
                     format="%(message)s")
+                    # format="%(asctime)s %(filename)s:%(lineno)s %(message)s", 
+                    # datefmt="%H:%M:%S")
+# logFormatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s")
 
 
-def main():
-    parser = optparse.OptionParser(usage="usage: %prog [options] directory")
-
-    parser.add_option("--config", dest="config_file",
-                      help="Configuration file name.",
-                      type="string", default="config.json")
-    parser.add_option("--no-output", action="store_true",
-                      help="Do not create output files.")
-    parser.add_option("--repeat", dest="repeat",
-                      help="Used for repeating the same experiment many times.",
-                      type="int", default="-1")
-
-    (commandline_kwargs, args) = parser.parse_args()
-
-    # Read in the config file
-    expt_dir  = os.path.realpath(args[0])
+def main(expt_dir, config_file="config.json", no_output=False, repeat=-1):
     if not os.path.isdir(expt_dir):
         raise Exception("Cannot find directory %s" % expt_dir)
 
-    options = parse_config_file(expt_dir, commandline_kwargs.config_file)
-    experiment_name = options["experiment-name"]
+    options = parse_config_file(expt_dir, config_file)
+    experiment_name = options["experiment_name"]
 
     # Special advanced feature for repeating the same experiment many times
-    if commandline_kwargs.repeat >= 0:
-        experiment_name = repeat_experiment_name(experiment_name, commandline_kwargs.repeat)
+    if repeat >= 0:
+        experiment_name = repeat_experiment_name(experiment_name, repeat)
 
-    if not commandline_kwargs.no_output: # if we want output
-        if commandline_kwargs.repeat >= 0:
-            output_directory = repeat_output_dir(expt_dir, commandline_kwargs.repeat)
+    if not no_output: # if we want output
+        if repeat >= 0:
+            output_directory = repeat_output_dir(expt_dir, repeat)
         else:
             output_directory = os.path.join(expt_dir, 'output')
         if not os.path.isdir(output_directory):
             os.mkdir(output_directory)
 
-        if commandline_kwargs.repeat < 0:
+        if repeat < 0:
             rootLogger = logging.getLogger()
             fileHandler = logging.FileHandler(os.path.join(output_directory, 'main.log'))
             fileHandler.setFormatter(logFormatter)
@@ -278,6 +267,10 @@ def main():
     # Connect to the database
     db_address = options['database']['address']
     db         = MongoDB(database_address=db_address)
+
+    overall_start_time = time.time()
+    db.save({'start-time':overall_start_time}, experiment_name, 'start-time')
+
 
     waiting_for_results = False  # for printing purposes only
     while True:
@@ -303,8 +296,6 @@ def main():
                     logging.info('\n')
                 waiting_for_results = False
 
-                optim_start_time = time.time()
-
                 # Load jobs from DB 
                 # (move out of one or both loops?) would need to pass into load_tasks
                 jobs = load_jobs(db, experiment_name)
@@ -329,26 +320,21 @@ def main():
                 
                 if hypers:
                     logging.debug('GP covariance hyperparameters:')
-                print_hypers(hypers)
+                print_hypers(hypers, input_space, options)
+                # if 'duration hypers' in hypers:
+                    # logging.debug('Duration GP covariance hyperparameters:')
+                    # print_hypers(hypers['duration hypers'], input_space, options)
 
                 # Save the hyperparameters to the database.
                 if hypers:
                     db.save(hypers, experiment_name, 'hypers')
 
-                # Compute the best value so far, a.k.a. the "recommendation"
-                recommendation = chooser.best()
+                if options['recommendations'] == "during":
+                    # Compute the best value so far, a.k.a. the "recommendation"
+                    recommendation = chooser.best()
 
-                # Save the recommendation in the DB
-                numComplete_by_task = {task_name : task.numComplete(jobs) for task_name, task in tasks.iteritems()}
-                db.save({'num_complete' : resource.numComplete(jobs),
-                     'num_complete_tasks' : numComplete_by_task,
-                     'params'   : input_space.paramify(recommendation['model_model_input']), 
-                     'objective': recommendation['model_model_value'],
-                     'params_o' : None if recommendation['obser_obser_input'] is None else input_space.paramify(recommendation['obser_obser_input']),
-                     'obj_o'    : recommendation['obser_obser_value'],
-                     'params_om': None if recommendation['obser_model_input'] is None else input_space.paramify(recommendation['obser_model_input']),
-                     'obj_om'   : recommendation['obser_model_value']}, 
-                experiment_name, 'recommendations', {'id' : len(jobs)})
+                    # Save the recommendation in the DB if there are more complete jobs than last time
+                    store_recommendation(recommendation, db, experiment_name, tasks, jobs, input_space, time.time()-overall_start_time)
 
                 # Get the decoupling groups
                 task_couplings = {task_name : tasks[task_name].options["group"] for task_name in resource.tasks}
@@ -356,7 +342,7 @@ def main():
                 logging.info('\nGetting suggestion for %s...\n' % (', '.join(task_couplings.keys())))
 
                 # Get the next suggested experiment from the chooser.
-                suggested_input, suggested_tasks = chooser.suggest(task_couplings, optim_start_time)
+                suggested_input, suggested_tasks = chooser.suggest(task_couplings)
                 suggested_task = suggested_tasks[0] # hack, deal with later
 
                 suggested_job = {
@@ -370,7 +356,8 @@ def main():
                     'status'      : 'new',
                     'submit time' : time.time(),
                     'start time'  : None,
-                    'end time'    : None
+                    'end time'    : None,
+                    'fast update' : chooser.fast_update # just for plotting - not important
                 }
 
                 save_job(suggested_job, db, experiment_name)
@@ -404,35 +391,51 @@ def main():
                 # For debug - print pending jobs
                 print_pending_jobs(jobs)
 
-        
         # Terminate the optimization if all resources are finished (run max number of jobs)
         # or ANY task is finished (just my weird convention)
-        if reduce(lambda x,y: x and y, map(lambda x: x.maxCompleteReached(jobs), resources.values()), True) or \
-           reduce(lambda x,y: x or y,  map(lambda x: x.maxCompleteReached(jobs), tasks.values()),     False):
-            # Do all this extra work just to save the final recommendation -- would be ok to delete everything
-            # in here and just "return"
-            sys.stdout.write('\n')
-            jobs = load_jobs(db, experiment_name)
-            tasks = parse_tasks_from_jobs(jobs, experiment_name, options, input_space)
-            hypers = db.load(experiment_name, 'hypers')
-            hypers = chooser.fit(tasks, hypers)
-            if hypers:
-                db.save(hypers, experiment_name, 'hypers')
-            # logging.info('\n**All resources have run the maximum number of jobs.**\nFinal recommendation:')
-            recommendation = chooser.best()
+        jobs = load_jobs(db, experiment_name)
+        tasks = parse_tasks_from_jobs(jobs, experiment_name, options, input_space)
+        terminate_resources = reduce(lambda x,y: x and y, map(lambda x: x.maxCompleteReached(jobs), resources.values()), True)
+        terminate_tasks     = reduce(lambda x,y: x or y,  map(lambda x: x.maxCompleteReached(jobs), tasks.values()),     False)
+        terminate_maxtime   = (time.time()-overall_start_time) >= (options['max_time_mins']*60.0)
+        
+        if terminate_resources or terminate_tasks or terminate_maxtime:
 
-            # numComplete_per_task
-            numComplete_by_task = {task_name : task.numComplete(jobs) for task_name, task in tasks.iteritems()}
-            db.save({'num_complete'       : resource.numComplete(jobs),
-                     'num_complete_tasks' : numComplete_by_task,
-                     'params'   : input_space.paramify(recommendation['model_model_input']), 
-                     'objective': recommendation['model_model_value'],
-                     'params_o' : None if recommendation['obser_obser_input'] is None else input_space.paramify(recommendation['obser_obser_input']),
-                     'obj_o'    : recommendation['obser_obser_value'],
-                     'params_om': None if recommendation['obser_model_input'] is None else input_space.paramify(recommendation['obser_model_input']),
-                     'obj_om'   : recommendation['obser_model_value']}, 
-                experiment_name, 'recommendations', {'id'       : len(jobs)})
-            logging.info('Maximum number of jobs completed. Have a nice day.')
+            if terminate_resources:
+                logging.info('Maximum number of jobs completed on all resources.')
+            if terminate_tasks:
+                logging.info('Maximum number of jobs reached for at least one task.')
+            if terminate_maxtime:
+                logging.info('Maximum total experiment time of %f minutes reached.' % options['max_time_mins'])
+
+            # save rec in DB
+            if options['recommendations'] in ("during", "end-one"):
+                logging.info('Making final recommendation:')
+                recommendation = chooser.best()
+                store_recommendation(recommendation, db, experiment_name, tasks, jobs, 
+                    input_space, time.time()-overall_start_time, final=True)
+            elif options['recommendations'] == "end-all":
+                logging.info('Making recommendations...')
+                all_jobs = jobs
+                for i in xrange(len(all_jobs)):
+                    logging.info('')
+                    logging.info('-------------------------------------------------')
+                    logging.info('     Getting recommendations for iter %d/%d      ' % (i, len(all_jobs)) )
+                    logging.info('-------------------------------------------------')
+                    logging.info('')
+
+                    jobs = all_jobs[:i+1]
+                    tasks = parse_tasks_from_jobs(jobs, experiment_name, options, input_space)
+                    hypers = chooser.fit(tasks, hypers)
+                    print_hypers(hypers, input_space, options)
+                    # get the biggest end time of the jobs
+                    end_time = max([job['end time'] for job in jobs])
+                    elapsed_time = end_time - overall_start_time
+
+                    recommendation = chooser.best()
+                    store_recommendation(recommendation, db, experiment_name, tasks, jobs, input_space, elapsed_time)
+
+            logging.info('Have a nice day.')
             return
 
         # If no resources are accepting jobs, sleep
@@ -446,6 +449,53 @@ def main():
         else:
             sys.stdout.write('\n')
 
+# if "final" is true it means we are at the end of optimizing, and we just want to make ONE
+# recommendation regardless of the rest of this stuff
+def store_recommendation(recommendation, db, experiment_name, tasks, jobs, input_space, elapsed_time, final=False):
+    stored_recs = db.load(experiment_name, 'recommendations')
+    if stored_recs is None:
+        previous_total_num_complete = 0
+    elif isinstance(stored_recs, dict):
+        previous_total_num_complete = 1
+    else:
+        previous_total_num_complete = max(map(lambda x: x['num_complete'], stored_recs))
+    
+    total_num_complete = sum(map(lambda x: x['status'] == 'complete', jobs)) # over all resources
+    
+    while total_num_complete > previous_total_num_complete or final:
+        logging.debug('Storing recommendation %d.' % previous_total_num_complete)
+        
+        db.save({'num_complete' : total_num_complete, 
+             'num_complete_tasks' : {task_name : task.numComplete(jobs) for task_name, task in tasks.iteritems()},
+             'params'   : input_space.paramify(recommendation['model_model_input']), 
+             'objective': recommendation['model_model_value'],
+             'params_o' : None if recommendation['obser_obser_input'] is None else input_space.paramify(recommendation['obser_obser_input']),
+             'obj_o'    : recommendation['obser_obser_value'],
+             'params_om': None if recommendation['obser_model_input'] is None else input_space.paramify(recommendation['obser_model_input']),
+             'obj_om'   : recommendation['obser_model_value'],
+             'total_elapsed_time' : elapsed_time}, 
+        experiment_name, 'recommendations', {'id' : previous_total_num_complete})
+        # We want to save 3 types of recommendations:
+        # 1) The best according to the model (model_model)
+        # 2) The best objective/constraint observation (obser_obser)
+        # 3) The best objective observation at a place where the model thinks the constraint is satisfied (obser_model)
+        
+        previous_total_num_complete += 1
+        # this is a bit complicated. but, basically, we only want to save a recommendation if there are actually new reuslts
+        # for example, if we have failed jobs then we don't wan't to keep saving recommendations even though
+        # we do want to keep making suggestions. 
+        # this while loop has 2 functions. first it serves like an "if" so if there is no new stuff,
+        # we do nothing. second, if we have multiple resources/capacity such that we completed more than 1
+        # new job since last time, we repeat the same recommendation multiple times. this part is a bit
+        # off-- it would be better to repeat the earlier recomendation instead of the later one... but
+        # shouldn't be a big deal. 
+        # this should also work out so that each recommendation has a unique id and the IDs 
+        # have no gaps in between them. good.
+
+        if final: # just do it once
+            return
+
+    # return previous_total_num_complete # there is no actual need to return this, it doesn't matter
 
 # Is it the case that no resources are accepting jobs?
 def no_free_resources(db, experiment_name, resources):
@@ -488,13 +538,25 @@ def print_pending_jobs(jobs):
         logging.info('ID(s) of pending job(s) for %s: %s' % (task_names_pending, ', '.join(pending_id_list)))
 
 
-def print_hypers(hypers):
+def print_hypers(hypers, input_space, options):
     for task_name, stored_dict in hypers.iteritems():
+        if task_name == 'duration hypers':
+            continue
         logging.debug(task_name)
         if 'latent values' in stored_dict:
             logging.debug('   Latent values: %s' % ', '.join(map(lambda x: '%.04f'%x, stored_dict['latent values'].values())))
         for hyper_name, hyper_value in stored_dict['hypers'].iteritems():
-            logging.debug('   %s: %s' % (hyper_name, hyper_value))
+            # special printing for length scales, to show the dimension names
+            if hyper_name == 'ls':
+                logging.debug('   length scales:')
+
+                length_scales = input_space.paramify(hyper_value)
+                for param_name, length_scale in length_scales.iteritems():
+                    logging.debug("      %-15.15s : %s" % (param_name, ', '.join(map(str, length_scale['values']))))
+                # logging.debug('')
+            else:
+                # regular hyperparam
+                logging.debug('   %-18.18s : %s' % (hyper_name, hyper_value))
     logging.debug('')
 
 def load_jobs(db, experiment_name):
@@ -511,4 +573,19 @@ def save_job(job, db, experiment_name):
     db.save(job, experiment_name, 'jobs', {'id' : job['id']})
 
 if __name__ == '__main__':
-    main()
+    parser = optparse.OptionParser(usage="usage: %prog [options] directory")
+
+    parser.add_option("--config", dest="config_file",
+                      help="Configuration file name.",
+                      type="string", default="config.json")
+    parser.add_option("--no-output", action="store_true",
+                      help="Do not create output files.")
+    parser.add_option("--repeat", dest="repeat",
+                      help="Used for repeating the same experiment many times.",
+                      type="int", default="-1")
+
+    (kwargs, args) = parser.parse_args()
+
+    expt_dir  = os.path.realpath(args[0])
+
+    main(expt_dir, kwargs.config_file, kwargs.no_output, kwargs.repeat)

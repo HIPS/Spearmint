@@ -212,13 +212,11 @@ class MongoDB(AbstractDB):
         if field_filters is None:
             field_filters = {}
 
-        # This is a bit tricky.
         save_doc.update(field_filters)
 
         save_doc = compress_nested_container(save_doc)
 
         dbcollection = self.db[experiment_name][experiment_field]
-        # dbdocs       = list(dbcollection.find(field_filters))
 
         return dbcollection.find_and_modify(field_filters, save_doc, upsert=True)
 
@@ -241,3 +239,16 @@ class MongoDB(AbstractDB):
     def remove(self, experiment_name, experiment_field, field_filters={}):
         self.db[experiment_name][experiment_field].remove(field_filters)
 
+    # this does not seem to work
+    def remove_experiment(self, experiment_name):
+        self.db[experiment_name].drop()
+
+    def remove_collection(self, experiment_name, experiment_field):
+        self.db[experiment_name][experiment_field].drop()
+        # self.db.drop_collection(self.db[experiment_name][experiment_field])
+
+
+# self.db is a Database
+# self.db[experinent_name] is a Collection
+# self.db[experinent_name][experiment_field] is ALSO a Collection... not a document
+# each entry itself is probably a document

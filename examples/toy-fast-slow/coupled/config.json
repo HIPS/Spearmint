@@ -1,0 +1,16 @@
+{
+    "base config file"  : "$LOCATION_OF_THIS_FILE$/../base_config.json",
+    "experiment-name"   : "toy-new-coupled",
+    "tasks" : {
+        "f" : {
+            "type" : "objective"
+        },
+        "c1" : {
+            "type": "constraint"
+        },
+        "c2" : {
+            "type" : "constraint"
+        }
+    }
+}
+

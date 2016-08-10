@@ -342,7 +342,7 @@ def plot_2d_constraints(chooser, directory, input_space, current_best=None):
     for constraint in chooser.constraints:
 
         model = chooser.models[constraint]
-        delta = chooser.tasks[constraint].options['delta']
+        delta = chooser.tasks[constraint].options['constraint_delta']
 
         figpath = os.path.join(directory, constraint)
 
@@ -586,7 +586,7 @@ def plot_hypers(model, directory, filename_prefix):
 def main(expt_dir, repeat=None):
 
     options = parse_config_file(expt_dir, 'config.json')
-    experiment_name = options["experiment-name"]
+    experiment_name = options["experiment_name"]
 
     if repeat is not None:
         experiment_name = repeat_experiment_name(experiment_name,repeat)

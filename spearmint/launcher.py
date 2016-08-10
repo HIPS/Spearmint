@@ -190,7 +190,7 @@ import subprocess
 import numpy as np
 
 from spearmint.utils.database.mongodb import MongoDB
-from spearmint.utils.parsing import DEFAULT_TASK_NAME, DEFAULT_CONSTRAINT_NAME
+from spearmint.utils.parsing import DEFAULTS
 from spearmint.tasks.input_space import paramify_no_types
 
 def main():
@@ -259,13 +259,13 @@ def launch(db_address, experiment_name, job_id):
             elif len(job['tasks']) == 1: # Only one named job and result is not a dict, stick it in dict
                 result = {job['tasks'][0] : result}
             else:
-                result = {DEFAULT_TASK_NAME : result}
+                result = {DEFAULTS['task name'] : result}
         else:
             if "objective" in result and "constraints" in result:
                 result_new = dict()
-                result_new[DEFAULT_TASK_NAME] = result["objective"]
+                result_new[DEFAULTS['task name']] = result["objective"]
                 for i in xrange(len(result["constraints"])):
-                    result_new['%s%d' % (DEFAULT_CONSTRAINT_NAME, i)] = result["constraints"][i]
+                    result_new['%s%d' % (DEFAULTS['constraint name'], i)] = result["constraints"][i]
                 result = result_new
 
         # actually it's ok if the result dict contains extra stuff. so it would be fine just to

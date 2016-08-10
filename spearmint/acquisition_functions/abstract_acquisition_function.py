@@ -184,7 +184,7 @@
 
 
 from abc import ABCMeta, abstractmethod
-
+import numpy as np
 
 class AbstractAcquisitionFunction(object):
     __metaclass__ = ABCMeta
@@ -194,6 +194,6 @@ class AbstractAcquisitionFunction(object):
         self.has_gradients = True
 
     @abstractmethod
-    def acquisition(self, *args, **kwargs):
-        """ Compute the acquisition function """
-        pass
+    def create_acquisition_function(self, *args, **kwargs):
+        """ Return a function that computes the acquisition function """
+        return lambda cand, compute_grad: np.zeros(cand.shape[0])

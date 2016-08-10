@@ -216,17 +216,7 @@ except:
 # want to override the defaults of the GP class that I am inheriting from. Instead,
 # these defaults add to the GP defaults, and in case they disagree the defaults here are used. 
 # So, in order of most to least priority: config file, defaults here, defaults in gp.py
-OPTION_DEFAULTS = {
-    'ess_thinning'      : 10,
-    'prior_whitening'   : True,
-    'binomial_trials'   : 1,
-    'transformations'   : [],
-    'priors'            : {'amp2' : {'distribution':'Exponential', 'parameters':[1.0]}},
-    'verbose'           : False,
-    'sigmoid'           : 'probit',
-    'epsilon'           : 0.5,
-    'likelihood'        : 'binomial'
-}
+# UPDATE: moved to parsing
 
 class GPClassifier(GP):
 

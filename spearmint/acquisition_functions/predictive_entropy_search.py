@@ -193,11 +193,16 @@ import copy
 import traceback
 import warnings
 
+from spearmint import main # can delete this
 from collections import defaultdict
+from collections import Counter
 from spearmint.grids import sobol_grid
 from spearmint.acquisition_functions.abstract_acquisition_function import AbstractAcquisitionFunction
 from spearmint.utils.numerics import logcdf_robust
 from spearmint.models.gp import GP
+from spearmint.utils import parsing # for testing
+
+from spearmint.models.abstract_model import function_over_hypers
 
 import logging
 
@@ -210,15 +215,27 @@ else:
 # see http://ab-initio.mit.edu/wiki/index.php/NLopt_Python_Reference
 
 
-NUM_RANDOM_FEATURES = 1000
-GRID_SIZE = 1000 # used in a hacky way when chooser passes in the grid
-
 """
 FOR GP MODELS ONLY
 """
 
+"""
+The thing is that for each sample of the hyper-parameters, you have to
+draw a sample of x_\star, the global solution of the problem, from its
+posterior distribution. However, it may happen that for some samples
+of the hyper-parameters, the posterior probability of the constraint
+being satisfied at least at one point of the input space can be very
+small and close to zero (when you condition to the drawn
+hyper-parameters). This may happen when for example you have collected
+data only at two infeasible locations that have the same value of the
+constraint (assuming zero noise). Then you may get some posterior
+samples of the hyper-parameters for the constraint that say that the
+constraint is a constant function. When this happens there are no
+feasible points and you cannot sample x_\star. What to do?
+"""
 # get samples of the solution to the problem
-def sample_solution(grid, num_dims, objective_gp, constraint_gps=[]):
+def sample_solution(grid, num_dims, objective_gp, constraint_gps=[], num_random_features=1000,
+    x_star_tolerance=1e-6):
     assert num_dims == grid.shape[1]
 
     # 1. The procedure is: sample f and all the constraints on the grid "cand" (or use a smaller grid???)
@@ -231,18 +248,35 @@ def sample_solution(grid, num_dims, objective_gp, constraint_gps=[]):
     while num_attempts < MAX_ATTEMPTS:
 
         gp_samples = dict()
-        gp_samples['objective'] = sample_gp_with_random_features(objective_gp, NUM_RANDOM_FEATURES)
+        gp_samples['objective'] = sample_gp_with_random_features(objective_gp, num_random_features)
         gp_samples['constraints'] = [sample_gp_with_random_features(constraint_gp, \
-            NUM_RANDOM_FEATURES) for constraint_gp in constraint_gps]
+            num_random_features) for constraint_gp in constraint_gps]
 
-        x_star_sample = global_optimization_of_GP_approximation(gp_samples, num_dims, grid)
+        # f = gp_samples['objective']
+        # print 'max:%f, min:%f   %d' % (np.max(f(grid, False)), np.min(f(grid, False)), len(f(grid, False)))
+        # for f in gp_samples['constraints']:
+        #     print 'max:%f, min:%f   %d' % (np.max(f(grid, False)), np.min(f(grid, False)), len(f(grid, False)))
+
+        x_star_sample = global_optimization_of_GP_approximation(gp_samples, num_dims, grid, x_star_tolerance=x_star_tolerance)
 
         if x_star_sample is not None: # success
             logging.debug('successfully sampled x* in %d attempt(s)' % (num_attempts+1))
 
+            # obj_at_x_star = gp_samples['objective'](x_star_sample, gradient=False)
+            # con_at_x_star = [sample(x_star_sample, gradient=False) for sample in gp_samples['constraints']]
+            # print 'Sampled x* after %d attempts. obj = %s, con=%s' % (num_attempts, obj_at_x_star, con_at_x_star)
+            # print 'obj mean = %+f, var = %f' % objective_gp.predict(x_star_sample)
+            # print 'c1  mean = %+f, var = %f' % constraint_gps[0].predict(x_star_sample)
+            # if len(constraint_gps) > 1:
+            #     print 'c2  mean = %+f, var = %f' % constraint_gps[1].predict(x_star_sample)
             return x_star_sample
 
         num_attempts += 1
+        # print x_star_sample
+
+        # ok this gets messy for binomial constraints, where it's not just >= 0
+        # damn. need to think about this in terms of gradients
+        # will it be an issue?? ... hmmm
 
     logging.info('Failed to sample x*')
 
@@ -286,6 +320,8 @@ def logSumExp(a,b):
     result[a<=b] = b[a<=b] + log_1_plus_exp_x(a[a<=b]-b[a<=b])
     return result
 
+
+
 # Compute log(1+exp(x)) in a robust way
 def log_1_plus_exp_x_scalar(x):
     if x < np.log(1e-6):
@@ -307,6 +343,7 @@ def log_1_plus_exp_x(x):
     result[x < np.log(1e-6)] = np.exp(x[x < np.log(1e-6)])
     result[x > np.log(100) ] = x [x > np.log(100) ]
     return result
+
 
 # Compute log(1-exp(x)) in a robust way, when exp(x) is between 0 and 1 
 # well, exp(x) is always bigger than 0
@@ -346,11 +383,14 @@ def log_1_minus_exp_x(x):
 def chol2inv(chol):
     return spla.cho_solve((chol, False), np.eye(chol.shape[0]))
 
+
 def matrixInverse(M):
     return chol2inv(spla.cholesky(M, lower=False))
 
+
 def ep(obj_model, con_models, x_star, minimize=True):
     # We construct the Vpred matrices and the mPred vectors
+
     n = obj_model.observed_values.size
     obj = 'objective'
     con = con_models.keys()
@@ -438,14 +478,31 @@ def ep(obj_model, con_models, x_star, minimize=True):
                 a = aOld
                 damping *= 0.5
 
+                # print 'reducing damping to %f' % damping
+
                 if damping < 1e-5:
+                    # print 'giving up'
                     aNew = aOld
-                    break
+                    break  # things failed, you are done...??
             else:
+                # print "success"
                 break # things worked, you are done
 
         # We check for convergence
         a = aNew
+
+        # print np.sum(a['m'][obj])
+        # print np.sum(a['m']['c1'])
+        # print np.sum(a['V'][obj])
+        # print np.sum(a['V']['c1'])
+        # print '-'
+        # print np.sum(a['Ahfhat'])
+        # print np.sum(a['bhfhat'])
+        # print np.sum(a['ahchat']['c1']) # a bit off 
+        # print np.sum(a['bhchat']['c1']) # a bit off
+        # print np.sum(a['agchat']['c1'])
+        # print np.sum(a['bgchat']['c1'])
+        # print '---'
 
         change = 0.0
         for t in all_tasks:
@@ -458,6 +515,10 @@ def ep(obj_model, con_models, x_star, minimize=True):
 
         damping   *= 0.99
         iteration += 1
+
+    # print "**done EP"
+
+
 
     # We update the means and covariance matrices for the constraint functions
     for c in con_models:
@@ -486,6 +547,98 @@ def ep(obj_model, con_models, x_star, minimize=True):
     # (Vc not actually used, but include it for consistency)
 
 
+# Need to do this overa ll states. Ok...
+# so we pass in a single EP solution, and the corresponding x_star
+# and we assume the state of the models matches these...
+def updateEPsolution(obj_model, con_models, epSolution, x_star):
+
+    a = epSolution
+
+    # Code at the beginning of ep routine
+
+    n = obj_model.observed_values.size
+    obj = 'objective'
+    con = con_models.keys()
+    all_tasks = con_models.copy()
+    all_tasks[obj] = obj_model
+
+    """ X contains X_star """
+    X = np.append(obj_model.observed_inputs, x_star, axis=0)
+
+    mPred         = dict()        
+    Vpred         = dict()
+    cholVpred     = dict()
+    VpredInv      = dict()
+    cholKstarstar = dict()
+
+    for t in all_tasks:
+        mPred[t], Vpred[t] = all_tasks[t].predict(X, full_cov=True)
+        cholVpred[t]       = spla.cholesky(Vpred[t])
+        VpredInv[t]        = chol2inv(cholVpred[t])
+        # Perform a redundant computation of this thing because predict() doesn't return it...
+        cholKstarstar[t]   = spla.cholesky(all_tasks[t].noiseless_kernel.cov(X))
+
+    a['m'] = defaultdict(lambda: np.zeros(n+1))
+    a['V'] = defaultdict(lambda: np.zeros((n+1, n+1)))
+    a['n'] = n
+    a['mPred'] = mPred
+    a['Vpred'] = Vpred
+    a['VpredInv'] = VpredInv
+    a['cholKstarstar'] = cholKstarstar
+
+    # Code that updates the marginals
+
+    n_fake_objective = n - a['Ahfhat'].shape[0]
+    vTilde = np.zeros((n+1, n+1))
+
+    # it seems you cannot append 3 things... and np.concatenate doesn't work with scalars
+    vTilde[np.eye(n+1).astype('bool')] = np.append(np.append(a['Ahfhat'][:, 0, 0], np.zeros(n_fake_objective)), np.sum(a['Ahfhat'][: , 1, 1]))
+    vTilde[:(n - n_fake_objective), -1] = a['Ahfhat'][:, 0, 1]
+    vTilde[-1, :(n - n_fake_objective)] = a['Ahfhat'][:, 0, 1]
+    # if np.any(npla.eigvalsh(a['VpredInv'][obj] + vTilde) < 1e-6):
+    #     raise npla.linalg.LinAlgError("Covariance matrix is not PSD!")    
+
+    a['V'][obj] = matrixInverse(a['VpredInv'][obj] + vTilde)
+    mTilde   = np.append(np.append(a['bhfhat'][:, 0], np.zeros(n_fake_objective)), np.sum(a['bhfhat'][:, 1]))
+    a['m'][obj] = np.dot(a['V'][obj], np.dot(a['VpredInv'][obj], a['mPred'][obj]) + mTilde)
+
+    # for the constraints
+    for c in con_models:
+        vTilde = np.diag(np.append(np.append(a['ahchat'][c], np.zeros(n_fake_objective)), a['agchat'][c]))
+        # if np.any(npla.eigvalsh(a['VpredInv'][c] + vTilde) < 1e-6):
+        #     raise npla.linalg.LinAlgError("Covariance matrix is not PSD!")    
+
+        a['V'][c] = matrixInverse(a['VpredInv'][c] + vTilde)
+        mTilde = np.append(np.append(a['bhchat'][c], np.zeros(n_fake_objective)), np.sum(a['bgchat'][c]))
+        a['m'][c] = np.dot(a['V'][c], np.dot(a['VpredInv'][c], a['mPred'][c]) + mTilde)
+
+
+    # code at the end of ep routine
+
+    # We update the means and covariance matrices for the constraint functions
+    for c in con_models:
+        X_all                  = np.append(X, con_models[c].observed_inputs, axis=0)
+        noise                  = con_models[c].noise_value()
+        Kstarstar              = con_models[c].noiseless_kernel.cov(X_all)
+        a['cholKstarstarc'][c] = spla.cholesky(Kstarstar)
+        mTilde                 = np.concatenate((a['bhchat'][c], np.zeros(n_fake_objective), 
+            np.array(a['bgchat'][c]), con_models[c].observed_values / noise))
+        vTilde                 = np.concatenate((a['ahchat'][c], np.zeros(n_fake_objective), 
+            np.array(a['agchat'][c]), np.tile(1.0 / noise, con_models[c].observed_values.size)))
+        Vc_inv                 = chol2inv(a['cholKstarstarc'][c]) + np.diag(vTilde)
+        # if np.any(npla.eigvalsh(Vc_inv) < 1e-6):
+        #     raise npla.linalg.LinAlgError("Covariance matrix is not PSD!")
+        chol_Vc_inv            = spla.cholesky(Vc_inv)
+        Vc                     = chol2inv(chol_Vc_inv) # a['Vc'][c]
+        a['cholVc'][c]         = spla.cholesky(Vc)
+        # a['mc'][c]             = np.dot(Vc, mTilde)
+        a['mc'][c]             = spla.cho_solve((chol_Vc_inv, False), mTilde)
+    
+        # We compute the cholesky factorization of the posterior covariance functions
+        a['cholV'][c] = spla.cholesky(a['V'][c])
+    a['cholV'][obj] = spla.cholesky(a['V'][obj])
+
+
 # This checks that things are PSD. We want this to trigger failure in the EP loop 
 # so that damping can be reduced if needed
 def checkConstraintsPSD(con_models, aNew, X):
@@ -501,7 +654,7 @@ def checkConstraintsPSD(con_models, aNew, X):
             raise npla.linalg.LinAlgError("Covariance matrix is not PSD!")
 
 # Updated a['V'] and a['m']
-def updateMarginals(a):
+def updateMarginals(a): # stuff below A.9
 
     n = a['n']
     obj = a['obj']
@@ -570,38 +723,38 @@ def updateFactors(a, damping, minimize=True):
         
         VfOldinv = Vfinv - a['Ahfhat'][i,:,:]
         cholVfOldinv = spla.cholesky(VfOldinv)
-        VfOld = chol2inv(cholVfOldinv)
+        VfOld = chol2inv(cholVfOldinv) # A.14
 
         # VfOld = matrixInverse(Vfinv - a['Ahfhat'][i,:,:])
         # mfOld = np.dot(VfOld, np.dot(Vfinv, a['m'][obj][[i, n]]) - a['bhfhat'][i,:])
-        mfOld = spla.cho_solve((cholVfOldinv,False), spla.cho_solve((cholVf,False), a['m'][obj][[i, n]]) - a['bhfhat'][i,:])
+        mfOld = spla.cho_solve((cholVfOldinv,False), spla.cho_solve((cholVf,False), a['m'][obj][[i, n]]) - a['bhfhat'][i,:]) # A.15
 
         vcOld = np.zeros(k)
         mcOld = np.zeros(k)
         for j,c in enumerate(constraints):
-            vcOld[j] = 1.0 / (1.0 / a['V'][c][i,i] - a['ahchat'][c][i])
-            mcOld[j] = vcOld[j] * (a['m'][c][i] / a['V'][c][i,i] - a['bhchat'][c][i])
+            vcOld[j] = 1.0 / (1.0 / a['V'][c][i,i] - a['ahchat'][c][i]) # A.16
+            mcOld[j] = vcOld[j] * (a['m'][c][i] / a['V'][c][i,i] - a['bhchat'][c][i]) # A.17
 
         # We compute the updates
-        alphac     = mcOld / np.sqrt(vcOld)
-        s           = VfOld[0, 0] - 2.0 * VfOld[1, 0] + VfOld[1, 1]
-        alpha       = (mfOld[1] - mfOld[0]) / np.sqrt(s) * sgn
-        logProdPhis = np.sum(logcdf_robust(alphac)) 
-        logZ        = logSumExp(logProdPhis + logcdf_robust(alpha),  log_1_minus_exp_x(logProdPhis))
-        ratio       = np.exp(sps.norm.logpdf(alphac) - logZ - logcdf_robust(alphac)) * (np.exp(logZ) - 1.0)
+        alphac     = mcOld / np.sqrt(vcOld) # right after A.18
+        s           = VfOld[0, 0] - 2.0 * VfOld[1, 0] + VfOld[1, 1] # right before A.22
+        alpha       = (mfOld[1] - mfOld[0]) / np.sqrt(s) * sgn # right after A.18
+        logProdPhis = np.sum(logcdf_robust(alphac))  
+        logZ        = logSumExp(logProdPhis + logcdf_robust(alpha),  log_1_minus_exp_x(logProdPhis)) # log of A.18
+        ratio       = np.exp(sps.norm.logpdf(alphac) - logZ - logcdf_robust(alphac)) * (np.exp(logZ) - 1.0) # middle factor in A.20
         # dlogZdmcOld = ratio / np.sqrt(vcOld)
-        d2logZdmcOld2 = -ratio * (alphac + ratio) / vcOld
-        ahchatNew = -1.0 / (1.0 / d2logZdmcOld2 + vcOld)
-        # bhchatNew = (mcOld + np.sqrt(vcOld) / (alphac + ratio)) * ahchatNew
+        d2logZdmcOld2 = -ratio * (alphac + ratio) / vcOld # A.20
+        ahchatNew = -1.0 / (1.0 / d2logZdmcOld2 + vcOld) # A.21
+        # bhchatNew = (mcOld + np.sqrt(vcOld) / (alphac + ratio)) * ahchatNew # A.21
         bhchatNew = -(mcOld / (1.0 / (-ratio * (alphac + ratio) / vcOld) + vcOld) + np.sqrt(vcOld) / (-vcOld / ratio + (alphac + ratio) * vcOld))
         # above: the bottom way of computing bhchatNew is more stable when (alphac + ratio) = 0
 
-        ratio = np.exp(logProdPhis + sps.norm.logpdf(alpha) - logZ)
-        dlogZdmfOld = ratio / np.sqrt(s) * np.array([-1.0, 1.0]) * sgn
-        dlogZdVfOld = -0.5 * ratio * alpha / s * np.array([[1.0,-1.0],[-1.0,1.0]])
-        mfNew = mfOld + spla.cho_solve((cholVfOldinv,False), dlogZdmfOld)
+        ratio = np.exp(logProdPhis + sps.norm.logpdf(alpha) - logZ) # eq below A.21
+        dlogZdmfOld = ratio / np.sqrt(s) * np.array([-1.0, 1.0]) * sgn # eq below A.21
+        dlogZdVfOld = -0.5 * ratio * alpha / s * np.array([[1.0,-1.0],[-1.0,1.0]]) # eq below A.21
+        mfNew = mfOld + spla.cho_solve((cholVfOldinv,False), dlogZdmfOld) # A.22
 
-        VfNew = VfOld - np.dot(spla.cho_solve((cholVfOldinv,False), np.dot(dlogZdmfOld[:,None], dlogZdmfOld[None]) - 2.0 * dlogZdVfOld), VfOld)
+        VfNew = VfOld - np.dot(spla.cho_solve((cholVfOldinv,False), np.dot(dlogZdmfOld[:,None], dlogZdmfOld[None]) - 2.0 * dlogZdVfOld), VfOld) # A.22
         
         # EXTRA_JITTER = np.eye(VfNew.shape[0])*a['jitter'][obj]
         # VfNew += EXTRA_JITTER
@@ -611,9 +764,9 @@ def updateFactors(a, damping, minimize=True):
         vfNewInv = chol2inv(cholVfNew)
         # vfNewInv = matrixInverse(VfNew)
         
-        AhfHatNew = vfNewInv - (Vfinv - a['Ahfhat'][i,:,:])
+        AhfHatNew = vfNewInv - (Vfinv - a['Ahfhat'][i,:,:]) # A.23
         # bhfHatNew = np.dot(vfNewInv, mfNew) - (np.dot(Vfinv, a['m'][obj][[i, n]]) - a['bhfhat'][i,:])
-        bhfHatNew = spla.cho_solve((cholVfNew,False), mfNew) - (spla.cho_solve((cholVf,False), a['m'][obj][[i, n]]) - a['bhfhat'][i,:])
+        bhfHatNew = spla.cho_solve((cholVfNew,False), mfNew) - (spla.cho_solve((cholVf,False), a['m'][obj][[i, n]]) - a['bhfhat'][i,:]) # A.23
 
         # We do damping
         a['Ahfhat'][i,:,:] = damping * AhfHatNew + (1.0 - damping) * a['Ahfhat'][i,:,:]
@@ -623,19 +776,25 @@ def updateFactors(a, damping, minimize=True):
             a['ahchat'][c][i] = damping * ahchatNew[j] + (1.0 - damping) * a['ahchat'][c][i]
             a['bhchat'][c][i] = damping * bhchatNew[j] + (1.0 - damping) * a['bhchat'][c][i]
 
+
+    # ***
+    # here we have slight deviation in the R code for some elments of Ahfhat and bhfhat
+    # that are zero in one and nonzero but small in the other. I am not sure yet if this
+    # is a bug or just a numerical difference in how things are computed...
+
     # We update the g factors
     # We obtain the cavities
     for j,c in enumerate(constraints):
-        vcOld[j] = 1.0 / (1.0 / a['V'][c][n, n] - a['agchat'][c])
-        mcOld[j] = vcOld[j] * (a['m'][c][n] / a['V'][c][n, n] - a['bgchat'][c])
+        vcOld[j] = 1.0 / (1.0 / a['V'][c][n, n] - a['agchat'][c]) # A.26
+        mcOld[j] = vcOld[j] * (a['m'][c][n] / a['V'][c][n, n] - a['bgchat'][c]) # A.26
     
     # We compute the updates
-    alpha = mcOld / np.sqrt(vcOld)
-    ratio = np.exp(sps.norm.logpdf(alpha) - logcdf_robust(alpha))
+    alpha = mcOld / np.sqrt(vcOld) # right before A.27
+    ratio = np.exp(sps.norm.logpdf(alpha) - logcdf_robust(alpha)) # part of A.27
     # dlogZdmcOld = ratio / np.sqrt(vcOld)
-    d2logZdmcOld2 = -ratio / vcOld * (alpha + ratio)
-    agchatNew = -1 / (1.0 / d2logZdmcOld2 + vcOld)
-    # bgchatNew = (mcOld + np.sqrt(vcOld) / (alpha + ratio)) * agchatNew
+    d2logZdmcOld2 = -ratio / vcOld * (alpha + ratio) # A.27
+    agchatNew = -1 / (1.0 / d2logZdmcOld2 + vcOld)  # A.28
+    # bgchatNew = (mcOld + np.sqrt(vcOld) / (alpha + ratio)) * agchatNew # A.28
     bgchatNew = -(mcOld / (1.0 / (-ratio * (alpha + ratio) / vcOld) + vcOld) + np.sqrt(vcOld) / (-vcOld / ratio + (alpha + ratio) * vcOld))
     # above: the bottom way of computing bhchatNew is more stable when (alphac + ratio) = 0
 
@@ -720,7 +879,7 @@ def predictEP(obj_model, con_models, a, x_star, Xtest, minimize=True):
     logProdPhis = np.sum(logcdf_robust(alphac), axis=1) # sum over constraints
     logZ    = logSumExp(logProdPhis + logcdf_robust(alpha), log_1_minus_exp_x(logProdPhis))
     ratio   = np.exp(logProdPhis + sps.norm.logpdf(alpha) - logZ)
-    # mfNew   = mf + (cov - vf) *  ratio / np.sqrt(s) * sgn
+    mfNew   = mf + (cov - vf) *  ratio / np.sqrt(s) * sgn
     # above: not used in the acquisition function
     vfNew   = vf - ratio / s * (ratio + alpha) * (vf - cov)**2
 
@@ -735,13 +894,27 @@ def predictEP(obj_model, con_models, a, x_star, Xtest, minimize=True):
             ratio = np.exp(50) # cap ratio to avoid overflow issues
 
     # dlogZdmcOld = ratio / np.sqrt(vc)
-    d2logZdmcOld2 = -ratio * (alphac + ratio) / vc # for numerical stability
+    d2logZdmcOld2 = -ratio * (alphac + ratio) / vc
+
+    # if -np.inf in d2logZdmcOld2:
+    #     pdb.set_trace()
+    #     obj_model.observed_inputs
+    #     obj_model.observed_values
+    #     obj_model.params['ls'].value
+    #     obj_model.params['amp2'].value
+
+    #     for con_model in con_models.values():
+    #         con_model.params['ls'].value
+    #         con_model.params['amp2'].value            
+
+        # raise Exception("d2logZdmcOld2 contains -inf. this will cause vcNew to be inf")
+
     ahchatNew = -1.0 / (1.0 / d2logZdmcOld2 + vc)
     # bhchatNew = (mc + np.sqrt(vc) / (alphac + ratio)) * ahchatNew
     bhchatNew = -(mc / (1.0 / (-ratio * (alphac + ratio) / vc) + vc) + np.sqrt(vc) / (-vc / ratio + (alphac + ratio) * vc))
     # above: the bottom way of computing bhchatNew is more stable when (alphac + ratio) = 0
     vcNew = 1.0 / (1.0 / vc + ahchatNew)
-    # mcNew = vcNew *  (mc / vc + bhchatNew)
+    mcNew = vcNew *  (mc / vc + bhchatNew)
     # mcNew not actually used
 
     # make sure variances are not negative, by replacing with old values
@@ -762,8 +935,8 @@ def predictEP(obj_model, con_models, a, x_star, Xtest, minimize=True):
     if np.any(np.isnan(vfNew)):
         raise Exception("vfnew constrains nan")
 
-    return {'mf':None, 'vf':vfNew, 'mc':None, 'vc':vcNew} 
-    # don't bother computing mf and mc since they are not used in the acquisition function
+    return {'mf':mfNew, 'vf':vfNew, 'mc':mcNew, 'vc':vcNew} 
+    # don't both computing mc since it's not used in the acquisition function
     # m = mean, v = var, f = objective, c = constraint
 
 
@@ -800,9 +973,11 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
         raise Exception('This random feature sampling is for the squared exp or Matern5/2 kernels and you are using the %s' % gp.options['kernel'])
     b = npr.uniform(low=0, high=2*np.pi, size=nFeatures)[:,None]
 
+
     # Just for testing the  random features in W and b... doesn't test the weights theta
     if testing:
         return lambda x: np.sqrt(2 * sigma2 / nFeatures) * np.cos(np.dot(W, x.T) + b)
+    # K(x1, x2) \approx np.dot(test(x1).T, tst_fun(x2))
 
     randomness = npr.randn(nFeatures)
 
@@ -812,7 +987,15 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
     # z is a vector of length nFeatures
 
     if gp.has_data:
-        tDesignMatrix = np.sqrt(2.0 * sigma2 / nFeatures) * np.cos(np.dot(W, gp.observed_inputs.T) + b)
+
+        # hack for the case where the GP acts on a subset of data...
+        if 'depends on' in gp.options:
+            gp_inputs = gp.transformer.forward_pass(gp.observed_inputs)
+        else:            
+            gp_inputs = gp.observed_inputs
+
+        # tDesignMatrix has size Nfeatures by Ndata
+        tDesignMatrix = np.sqrt(2.0 * sigma2 / nFeatures) * np.cos(np.dot(W, gp_inputs.T) + b)
 
         if use_woodbury_if_faster and N_data < nFeatures:
             # you can do things in cost N^2d instead of d^3 by doing this woodbury thing
@@ -854,11 +1037,13 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
             # m = np.dot(Sigma, np.dot(tDesignMatrix, gp.observed_values))
             # theta = m + np.dot(randomness, spla.cholesky(Sigma*nu2, lower=False)).T
 
-            chol_Sigma_inverse = spla.cholesky(np.dot(tDesignMatrix, tDesignMatrix.T) + nu2*np.eye(nFeatures))
+            approx_Kxx = np.dot(tDesignMatrix, tDesignMatrix.T)
+            chol_Sigma_inverse = spla.cholesky(approx_Kxx + nu2*np.eye(nFeatures))
             Sigma = chol2inv(chol_Sigma_inverse)
             m = spla.cho_solve((chol_Sigma_inverse, False), np.dot(tDesignMatrix, gp.observed_values))
             theta = m + np.dot(randomness, spla.cholesky(Sigma*nu2, lower=False)).T
-
+            # the above commented out version might be less stable? i forget why i changed it
+            # that's ok.
 
     else:
         # We sample from the prior -- same for Matern
@@ -868,9 +1053,12 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
     # the argument "gradient" is 
     # not the usual compute_grad that computes BOTH when true
     # here it only computes the objective when true
-        
+
         if x.ndim == 1:
-            x = x[None,:]
+            x = x[None]
+
+        if 'depends on' in gp.options:
+            x = gp.transformer.forward_pass(x)
 
         if not gradient:
             result = np.dot(theta.T, np.sqrt(2.0 * sigma2 / nFeatures) * np.cos(np.dot(W, x.T) + b))
@@ -879,7 +1067,12 @@ def sample_gp_with_random_features(gp, nFeatures, testing=False, use_woodbury_if
                 # (failure to do so messed up NLopt and it only gives a cryptic error message)
             return result
         else:
-            return np.dot(theta.T, -np.sqrt(2.0 * sigma2 / nFeatures) * np.sin(np.dot(W, x.T) + b) * W)
+            grad = np.dot(theta.T, -np.sqrt(2.0 * sigma2 / nFeatures) * np.sin(np.dot(W, x.T) + b) * W)
+
+            if 'depends on' in gp.options:
+                grad = gp.transformer.backward_pass(grad)
+
+            return grad
     
     return wrapper
 
@@ -892,7 +1085,7 @@ we return None
 wrapper_functions should be a dict with keys 'objective' and optionally 'constraints'
 """
 # find MINIMUM if minimize=True, else find a maximum
-def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True):
+def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True, x_star_tolerance=1e-6):
 
     assert num_dims == grid.shape[1]
 
@@ -904,7 +1097,8 @@ def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True)
     con_evals = np.ones(grid.shape[0]).astype('bool')
     for con_fun in funs['constraints']:
         con_evals = np.logical_and(con_evals, con_fun(grid, gradient=False)>=0)
-
+    # TODO-- deal with other stuff -- or make the binomial thing fit in somehow, this is becoming a mess...
+    # can we give it the latent values somehow... or something?
     if not np.any(con_evals):
         return None
 
@@ -916,6 +1110,9 @@ def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True)
         best_guess_value = np.max(obj_evals[con_evals])
     x_initial = grid[con_evals][best_guess_index]
 
+    # print 'optimiszing'
+    # for reference info
+    # todo - use scipy optimizer as a backup
 
     fun_counter = defaultdict(int)
 
@@ -1018,99 +1215,183 @@ def global_optimization_of_GP_approximation(funs, num_dims, grid, minimize=True)
 
 class PES(AbstractAcquisitionFunction):
 
-    def __init__(self, num_dims, verbose=True, input_space=None, grid=None):
-        # we want to cache these. we use a dict indexed by the state integer
-        self.cached_EP_solutions = dict()
-        self.cached_x_star = dict()
+    # this is just called once it total
+    def __init__(self, num_dims, verbose=True, input_space=None):
 
         self.has_gradients = False
 
         self.num_dims = num_dims
 
-        if grid is None:
-            self.xstar_grid = sobol_grid.generate(num_dims, grid_size=GRID_SIZE)
-        else:
-            # This is a total hack. We just do this to make sure we include
-            # The observed points and spray points that are added on.
-            # If you had more than GRID_SIZE observations this would be totally messed up...
-            logging.debug('Note: grid passed in has size %d, truncating to size %d for PESC.' % (grid.shape[0], GRID_SIZE))
-            self.xstar_grid = grid[-GRID_SIZE:]
-
         self.input_space = input_space
 
+        self.cached_EP_solutions = None
+        self.cached_x_star = None
+
+        self.xstar_grid = None
+
+    # this is the thing that's called once per iteration
     # obj_models is a GP
     # con_models is a dict of named constraints and their GPs
-    def acquisition(self, obj_model_dict, con_models_dict, cand, current_best, 
-                    compute_grad, DEBUG_xstar=None, minimize=True, tasks=None):
-        obj_model = obj_model_dict.values()[0]
+    # if fast is True, you do the fast update defined by updateEPsolutions
+    # this is called every time
+    # current_Best is not used but it's part of the signature for the acquisition function
+    # --> maybe this should be part of set_options too, eh? i think so yeah, need to change for EI maybe
+    # I guess in reality on cand and compute_grad need to be passed in every time
 
+    def create_acquisition_function(self, obj_model_dict, con_models_dict,
+        fast=False, grid=None, DEBUG_xstar=None, current_best=None,
+        num_random_features=1000,
+        x_star_grid_size=1000, x_star_tolerance=1e-6, num_x_star_samples=1):
+
+        obj_model = obj_model_dict.values()[0]
+        con_models = con_models_dict.values()
         models = [obj_model] + list(con_models_dict.values())
 
         for model in models:
             # if model.pending is not None:
-            #     raise NotImplementedError("PES not implemented for pending stuff? Not sure. Should just impute the mean...")
-
+                # raise NotImplementedError("PES not implemented for pending stuff? Not sure. Should just impute the mean...")
             if not model.options['caching']:
                 logging.error("Warning: caching is off while using PES!")
+            if model.__class__.__name__ != "GP":
+                raise Exception("PESC needs to be used with a GP model, not %s" % model.__class__.__name__)
 
-        # make sure all models are at the same state
-        assert len({model.state for model in models}) == 1, "Models are not all at the same state"
-        assert not compute_grad 
 
-        N_cand = cand.shape[0]
+        self.DEBUG_xstar = DEBUG_xstar
 
-        # If the epSolution is already saved, load it.
-        # Otherwise, compute it with the ep() function and save it
-        # print ''
-        if obj_model.state in self.cached_EP_solutions:
-            x_star     = self.cached_x_star[obj_model.state]
-            epSolution = self.cached_EP_solutions[obj_model.state]
+        if grid is None or grid.shape[0] < x_star_grid_size:
+            self.xstar_grid = sobol_grid.generate(self.num_dims, grid_size=x_star_grid_size)
         else:
-            #logging.debug('Sampling solution for hyper sample %d' % obj_model.state)
-            if DEBUG_xstar is None:
-                x_star = sample_solution(self.xstar_grid, self.num_dims, obj_model, con_models_dict.values())
+            # This is a total hack. We just do this to make sure we include
+            # The observed points and spray points that are added on.
+            # If you had more than GRID_SIZE observations this would be totally messed up...
+            logging.debug('Note: grid passed in has size %d, truncating to size %d for x* sampling in PESC.' % (grid.shape[0], x_star_grid_size))
+            self.xstar_grid = grid[-x_star_grid_size:]
 
-                if x_star is None:
-                    self.cached_x_star[obj_model.state] = None
-                    self.cached_EP_solutions[obj_model.state] = None
-                    return np.zeros(cand.shape[0])
 
-                if self.input_space:
-                    logging.debug('x* = %s' % self.input_space.from_unit(x_star))
-                else:
-                    logging.debug('x* = %s' % str(x_star))
+        # we want to cache these. we use a dict indexed by the state integer
+        if not fast:
+            self.cached_EP_solutions = defaultdict(list)
+            self.cached_x_star = defaultdict(list)
+            logging.debug('Performing PESC full update.')
+        else:
+            if self.cached_x_star is None or self.cached_EP_solutions is None:
+                raise Exception("Cannot do fast PESC update before ever doing a full update")
+            logging.debug('Performing PESC fast update.')
+        # clear these every iteration
+
+
+        # Do the actual EP or x* sampling, for all states 
+        function_over_hypers(models, self.performEPandXstarSamplingForOneState, 
+            obj_model, con_models_dict, fast, num_random_features, x_star_tolerance, num_x_star_samples)
+
+        self.stored_acq = dict()
+
+        # create the acquisition function
+        # note: doesn't have to be this way-- could just be a function that is called
+        # but this way we ensure the other stuff is always done first -- otherwise would just
+        # need to check it-- either way is OK
+        def acquisition(cand, compute_grad=False, tasks=None):
+
+            # we cache things because PESC has this funny property
+            # that it computes the acq for all tasks
+            # so when you do the grid acq from the chooser, you actually redo all the
+            # work in predictEP over again for each task. this can waste time.
+            # so we try this caching scheme
+            inputs_hash = hash(cand.tostring())
+            # inputs_hash = hash(str(cand)) # this just hashes the string representation, which is NOT the whole array... but should be good enough
+            cache_key = (inputs_hash, obj_model.state)
+            if cache_key in self.stored_acq:
+                # print 'Getting acq for %s state (%s,%d) from cache' % (tasks, inputs_hash, obj_model.state)
+                return sum([self.stored_acq[cache_key][task] for task in tasks])
+
+            # make sure all models are at the same state
+            if len({model.state for model in models}) != 1:
+                raise Exception("Models are not all at the same state")
+            assert not compute_grad 
+
+            N_cand = cand.shape[0]
+
+            x_stars = self.cached_x_star[obj_model.state]
+            ep_sols = self.cached_EP_solutions[obj_model.state]            
+
+            acq_dict = defaultdict(lambda: np.zeros(N_cand)) 
+            # above: do this rather than defaultdict(float) because in some rare cases
+            # where all samples fail, then we return 0.0 instead of np.zeros(N_cand), which
+            # messes up function-over-hypers, because this expects an ndarray
+            # in particular when f-over-h is subsampling, this happens more... 
+            for i in xrange(num_x_star_samples):
+
+                # if you failed to sample a solution, just return 0
+                if x_stars[i] is None:
+                    continue
+
+                # use the EP solutions to compute the acquisition function 
+                # (in the R code, this is the function evaluateAcquisitionFunction, which calls predictEP)
+                for t, val in evaluate_acquisition_function_given_EP_solution(obj_model_dict, 
+                                                con_models_dict, cand, ep_sols[i], x_stars[i]).iteritems():
+                    acq_dict[t] += val # taking an average here
+            # change from sum to average (not that important:
+            for t in acq_dict:
+                acq_dict[t] = acq_dict[t] / float(num_x_star_samples)
+
+            self.stored_acq[cache_key] = acq_dict
+
+            # by default, sum the PESC contribution for all tasks
+            if tasks is None:
+                tasks = acq_dict.keys()
+
+            # Compute the total acquisition function for the tasks of interests
+            return sum([acq_dict[task] for task in tasks])
+
+        return acquisition
+
+    def performEPandXstarSamplingForOneState(self, obj_model, con_models_dict, fast, 
+        num_random_features, x_star_tolerance, num_x_star_samples):
+
+        x_stars = self.cached_x_star[obj_model.state]
+        ep_sols = self.cached_EP_solutions[obj_model.state]
+
+        # we now allow multiple of these per GP sample state... a bit confusing... very confusing
+        for i in xrange(num_x_star_samples):
+
+            if fast:
+                if x_stars[i] is not None:
+                    updateEPsolution(obj_model, con_models_dict, ep_sols[i], x_stars[i])
             else:
-                logging.debug('DEBUG MODE: using xstar value of %s' % str(DEBUG_xstar))
-                x_star = DEBUG_xstar
+                if self.DEBUG_xstar is not None:
+                    logging.debug('DEBUG MODE: using xstar value of %s' % str(self.DEBUG_xstar))
+                    x_star = self.DEBUG_xstar
+                    x_stars.append(self.DEBUG_xstar)
+                # sample x*
+                else:
+                    x_star = sample_solution(self.xstar_grid, self.num_dims, obj_model, con_models_dict.values(), 
+                        num_random_features=num_random_features, x_star_tolerance=x_star_tolerance)
+                    x_stars.append(x_star)
 
-            # logging.debug('Doing EP for hyper sample %d' % obj_model.state)
-            with np.errstate(divide='ignore',over='ignore'):
-                epSolution = ep(obj_model, con_models_dict, x_star, minimize=minimize)
+                    if x_star is None: # if you failed to sample x*
+                        ep_sols.append(None)
+                        continue
 
-            self.cached_x_star[obj_model.state] = x_star
-            self.cached_EP_solutions[obj_model.state] = epSolution
+                    # from hereon assumes x* was sampled successfully
 
-        # if you failed to sample a solution, just return 0
-        if x_star is None:
-            return np.zeros(cand.shape[0])
+                    # print stuff out
+                    if self.input_space:
+                        logging.debug('x* = %s' % self.input_space.from_unit(x_star))
+                        # logging.debug('x* = ')
+                        # self.input_space.paramify_and_print(self.input_space.from_unit(x_star).flatten(), 
+                        #     print_func=logging.debug)
+                    else:
+                        logging.debug('x* = %s' % str(x_star))
+     
+                # perform EP
+                with np.errstate(divide='ignore',over='ignore'):
+                    epSolution = ep(obj_model, con_models_dict, x_star)
+                ep_sols.append(epSolution)
 
-        # use the EP solutions to compute the acquisition function 
-        acq_dict = evaluate_acquisition_function_given_EP_solution(obj_model_dict, con_models_dict, cand, epSolution, x_star, minimize=minimize)
-
-        # by default, sum the PESC contribution for all tasks
-        if tasks is None:
-            tasks = acq_dict.keys()
-
-        # Compute the total acquisition function for the tasks of interests
-        total_acq = 0.0
-        for task in tasks:
-            total_acq += acq_dict[task]
-
-        return total_acq
-
+        return np.zeros(1) # this doesn't do anything-- but just to make sure function_over_hypers does its job.
 
 # Returns the PES(C) for each task given the EP solution and sampled x_star. 
-def evaluate_acquisition_function_given_EP_solution(obj_model_dict, con_models, cand, epSolution, x_star, minimize=True):
+def evaluate_acquisition_function_given_EP_solution(obj_model_dict, con_models, cand, epSolution, x_star):
     if cand.ndim == 1:
         cand = cand[None]
 
@@ -1129,7 +1410,7 @@ def evaluate_acquisition_function_given_EP_solution(obj_model_dict, con_models, 
 
     # We then evaluate the constrained variances
     with np.errstate(divide='ignore', over='ignore'):
-        predictionEP = predictEP(obj_model, con_models, epSolution, x_star, cand, minimize=minimize)
+        predictionEP = predictEP(obj_model, con_models, epSolution, x_star, cand)
 
     # constrainedVariances = np.zeros((N_cand, len(con_models)+1))
     # constrainedVariances[:,0] = predictionEP['vf'] + obj_model.noise_value()
@@ -1140,7 +1421,16 @@ def evaluate_acquisition_function_given_EP_solution(obj_model_dict, con_models, 
     for j, c in enumerate(con_models):
         constrainedVariances[c] = predictionEP['vc'][:,j] + con_models[c].noise_value()
 
+    # if N_cand == 1:
+    #     print 'cand=%s,  x*+%s' % (cand, x_star)
+    #     print 'obj:%+g = %g - %g;  noise=%g' % (unconstrainedVariances[0,0]-constrainedVariances[0,0], unconstrainedVariances[0,0], constrainedVariances[0,0], obj_model.noise_value())
+    #     print 'co1:%+g = %g - %g;  noise=%g' % (unconstrainedVariances[0,1]-constrainedVariances[0,1], unconstrainedVariances[0,1], constrainedVariances[0,1], con_models.values()[0].noise_value())
+    #     print 'co2:%+g = %g - %g;  noise=%g' % (unconstrainedVariances[0,2]-constrainedVariances[0,2], unconstrainedVariances[0,2], constrainedVariances[0,2], con_models.values()[1].noise_value())
+    #     print 'conLHS:%+g' % np.sum(np.log(2 * np.pi * np.e * unconstrainedVariances[0,1:]))
+    #     print 'conRHS:%+g' % np.sum(np.log(2 * np.pi * np.e * constrainedVariances[0,1:]))
+
     # We only care about the variances because the means do not affect the entropy
+
     acq = dict()
     for t in unconstrainedVariances:
         acq[t] = 0.5 * np.log(2 * np.pi * np.e * unconstrainedVariances[t]) - \
@@ -1152,7 +1442,7 @@ def evaluate_acquisition_function_given_EP_solution(obj_model_dict, con_models, 
 
     for t in acq:
         if np.any(np.isnan(acq[t])):
-            raise Exception("Acquisition function containts NaN for task %s" % t)
+            raise Exception("Acquisition function contains NaN for task %s" % t)
 
     return acq
 
@@ -1269,7 +1559,7 @@ def test_x_star_sampling():
     constraint.fit(inputs, constraint_vals, fit_hypers=False)
 
 
-    grid = sobol_grid.generate(D, grid_size=GRID_SIZE) 
+    grid = sobol_grid.generate(D, grid_size=1000) 
     
     minimum = sample_solution(grid, D, objective, [constraint])
     print 'Constrained Minimum of a different samples = %s' % str(minimum)
@@ -1291,6 +1581,8 @@ def test_x_star_sampling():
         plt.plot(spacing, approx_grad, 'g')
         plt.plot(unconstrained_minimum, wrapper(unconstrained_minimum, gradient=False), color='orange', marker='*', markersize=20)
         plt.show()
+
+
 
 
 def test_acquisition_function():
@@ -1336,22 +1628,19 @@ def test_acquisition_function():
         # the noise is 1e-6, the stability jitter is 1e-10
         STABILITY_JITTER = 1e-10
 
-        objective = GP(D, 
-            mcmc_iters=0, 
-            likelihood='gaussian', 
-            kernel="SquaredExp", 
-            stability_jitter=STABILITY_JITTER,
-            initial_noise=1e-6)
+        cfg = parsing.parse_config({'mcmc_iters':0, 
+            'acquisition':'PES',
+            'likelihood':'gaussian', 
+            'kernel':"SquaredExp", 
+            'stability_jitter':STABILITY_JITTER,
+            'initial_noise':1e-6})['tasks'].values()[0]
+        objective = GP(D, **cfg)
+
         objective.fit(inputs, vals, fit_hypers=False)
-        constraint = GP(D, 
-            mcmc_iters=0, 
-            likelihood='gaussian', 
-            kernel="SquaredExp", 
-            stability_jitter=STABILITY_JITTER,
-            initial_noise=1e-6)
+        constraint = GP(D, **cfg)
         constraint.fit(inputs, constraint_vals, fit_hypers=False)
 
-        c2 = GP(D, mcmc_iters=0)
+        c2 = GP(D, **cfg)
         c2.fit(inputs, npr.randn(N), fit_hypers=False)
 
         cons = {'c1':constraint, 'c2':c2}
@@ -1362,13 +1651,333 @@ def test_acquisition_function():
         # for p in constraint.params:
         #     print '%s: %f' % (p, constraint.params[p].value)
 
-        acq_f = PES(D)
-        acq_val = acq_f.acquisition(objective, cons, test_input, None, False, DEBUG_xstar=x_star)
+        acq_class = PES(D)
+        acq_f = acq_class.create_acquisition_function({'obj':objective}, cons, DEBUG_xstar=x_star)
+
+        acq_val = acq_f(test_input)
         print 'Acquisition value: %s' % (acq_val)
 
 
+
+
+def plot_mean_and_var_1d(mean, var, x_test, x_data, y_data):
+    std = np.sqrt(var)
+    x_test = x_test.flatten()
+    x_data = x_data.flatten()
+    mean = mean.flatten()
+    std = std.flatten()
+
+    ax = plt.gca()
+    # ax.spines['bottom'].set_visible(False)
+    # ax.spines['top'].set_visible(False)
+    plt.xticks([])
+    plt.yticks([])
+
+    plt.plot(x_data, y_data, '.b', markersize=12)
+    plt.plot(x_test, mean, 'r', linewidth=2)
+    plt.fill_between(x_test, mean-std, mean+std, color='b', alpha=0.25)
+
+
+def make_cool_figures():
+    # the goal here is to plot, in 1-D, p(y|D) and p(y|D,x*) for a couple values of x*
+    # We should be able to plot both the mean and variance because it's 1-D.
+    # actually let's just do one value of x*. but we need 4 plots because 
+    # there are 2 functions, the objective and the constraint. OK!
+
+    xmin = 0
+    xmax = 1
+
+    # first, some random data
+    D = 1
+    N_grid = 500
+    # N_data = 7    
+    # obj_inputs = npr.rand(N_data, D)
+    # con_inputs = npr.rand(N_data, D)    
+    # obj_vals = npr.randn(N_data)
+    # con_vals = npr.randn(N_data)
+    obj_inputs = np.array([0, 0.15, 0.2, 0.25, 0.6, 0.65, 1.0])[:,None]
+    con_inputs = np.array([0.0, 0.2, 0.3, 0.6, 0.65, 0.75])[:,None]
+    obj_vals = np.array([0.3, 0.1, -0.1, 0.1, -0.2, -0.5, 0.0])
+    con_vals = np.array([-0.2, 0.0, 0.8, 0.5, 0.4, 0.35])
+
+    test_inputs = np.linspace(0,1,N_grid)[:,None]
+    
+    # next, fit a GP
+    cfg = parsing.parse_config({'mcmc_iters':0, 'initial_noise':1e-6, 'initial_amp2':1,
+        'acquisition':'PES'})['tasks'].values()[0]
+    
+    obj_gp = GP(D, **cfg)
+    con_gp = GP(D, **cfg)
+
+    obj_gp.fit(obj_inputs, obj_vals)
+    con_gp.fit(con_inputs, con_vals)
+
+    obj_dict = {'obj':obj_gp}
+    con_dict = {'con':con_gp}
+
+    num_random_features = int(1e4)
+    obj_approx_sample = sample_gp_with_random_features(obj_gp, num_random_features)
+    con_approx_sample = sample_gp_with_random_features(con_gp, num_random_features)
+
+    x_star = global_optimization_of_GP_approximation(\
+        {'objective':obj_approx_sample,'constraints':[con_approx_sample]}, 
+        D, test_inputs)
+    epSolution = ep(obj_gp, con_dict, x_star)
+    predictionEP = predictEP(obj_gp, con_dict, epSolution, x_star, test_inputs)
+    pesc = evaluate_acquisition_function_given_EP_solution(obj_dict, con_dict, test_inputs, epSolution, x_star)
+
+
+    num_x_star = 100
+    acq_class = PES(D)
+    acq_func = acq_class.create_acquisition_function(obj_dict, con_dict,
+        grid=test_inputs,num_random_features=num_random_features,
+        num_x_star_samples=num_x_star,
+        x_star_tolerance=float(xmax-xmin)/float(N_grid) )
+
+    x_star = x_star.flatten()
+
+
+    # next, we plot p(y_obj|D)
+    # plt.figure()
+    # plt.clf()
+    # n = 5
+    # gs = gridspec.GridSpec(2, n)
+    
+    # plt.subplot(gs[0])
+    # plt.plot(test_inputs, obj_approx_sample(test_inputs,False), 'r', linewidth=2)
+    # plt.plot(x_star, obj_approx_sample(x_star,False), 'o', markerfacecolor='none', markersize=15,markeredgewidth=2,markeredgecolor='orange')
+    # plt.xticks([])
+    # plt.yticks([])
+    # ymin_f,ymax_f = plt.ylim()
+    # plt.xlim(xmin,xmax)
+    # # plt.gca().set_aspect()(ymax_f)
+
+    # plt.subplot(gs[n])
+    # plt.plot(test_inputs, con_approx_sample(test_inputs,False), 'r', linewidth=2)
+    # plt.plot(x_star, con_approx_sample(x_star,False), 'o', markerfacecolor='none', markersize=15,markeredgewidth=2,markeredgecolor='orange')
+    # plt.plot([xmin, xmax], [0,0], '--k')
+    # plt.xticks([])
+    # plt.yticks([])
+    # ymin_c,ymax_c = plt.ylim()
+    # plt.xlim(xmin,xmax)
+
+    # plt.subplot(gs[1])
+    # obj_mean, obj_var = obj_gp.predict(test_inputs)
+    # plot_mean_and_var_1d(obj_mean, obj_var, test_inputs, obj_inputs, obj_vals)
+    # plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    # plt.ylim(ymin_f,ymax_f)
+    # plt.xlim(xmin,xmax)
+
+    # plt.subplot(gs[n+1])
+    # con_mean, con_var = con_gp.predict(test_inputs)
+    # plot_mean_and_var_1d(con_mean, con_var, test_inputs, con_inputs, con_vals)
+    # # plot a line at 0
+    # plt.plot([xmin, xmax], [0,0], '--k')
+    # plt.plot(x_star, ymin_c, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_c,ymax_c], '--', color='orange')
+    # plt.ylim(ymin_c,ymax_c)
+    # plt.xlim(xmin,xmax)
+
+    # # now we condition on x*
+
+
+    # plt.subplot(gs[2])
+    # plot_mean_and_var_1d(predictionEP['mf'], predictionEP['vf'], test_inputs, obj_inputs, obj_vals)
+    # plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    # plt.ylim(ymin_f,ymax_f)
+    # plt.xlim(xmin,xmax)
+
+    # plt.subplot(gs[n+2])
+    # plot_mean_and_var_1d(predictionEP['mc'], predictionEP['vc'], test_inputs, con_inputs, con_vals)
+    # # plot a line at 0
+    # plt.plot([xmin, xmax], [0,0], '--k')
+    # plt.plot(x_star, ymin_c, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_c,ymax_c], '--', color='orange')
+    # plt.ylim(ymin_c,ymax_c)
+    # plt.xlim(xmin,xmax)
+    # # ALSO SHOW THE ACQUISITION FUNCITON... the individual ones in fact
+    # # and, also, fill in the places where p(valid) > .99 or something
+
+
+    # plt.subplot(gs[3])
+    # plt.plot(test_inputs, pesc['obj'], 'k', linewidth=2)
+    # plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    # plt.xticks([])
+    # plt.yticks([])
+
+    # plt.subplot(gs[n+3])
+    # plt.plot(test_inputs, pesc['con'], 'k', linewidth=2)
+    # plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    # plt.xticks([])
+    # plt.yticks([])
+
+
+
+    # plt.subplot(gs[4])
+    # plt.plot(test_inputs, acq_func(test_inputs, tasks=['obj']), 'k', linewidth=2)
+    # plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    # plt.xticks([])
+    # plt.yticks([])
+    
+    # plt.subplot(gs[n+4])
+    # plt.plot(test_inputs, acq_func(test_inputs, tasks=['con']), 'k', linewidth=2)
+    # plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    # plt.xticks([])
+    # plt.yticks([])
+
+    # plt.tight_layout()
+    # plt.savefig('test4.svg')
+
+    # # now we compute it with an average over x*'s'
+    
+
+    plt.figure()
+    plt.clf()
+    plt.hist(acq_class.cached_x_star.values(), bins=np.linspace(xmin,xmax,10), normed=True)
+    plt.xticks([])
+    plt.yticks([])
+    plt.savefig('test_xstar_hist.png')
+
+
+    sz = (1.5,2.5)
+    pad = 0.15
+    plt.figure(figsize=sz)
+    plt.clf()    
+    plt.plot(test_inputs, obj_approx_sample(test_inputs,False), 'r', linewidth=2)
+    # plt.plot(x_star, obj_approx_sample(x_star,False), 'o', markerfacecolor='none', markersize=15,markeredgewidth=2,markeredgecolor='orange')
+    ymin_f,ymax_f = plt.ylim()
+    plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    plt.xticks([])
+    plt.yticks([])
+    plt.xlim(xmin,xmax)
+    # plt.ylabel('Objective')
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4A.pdf')
+
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    plt.plot(test_inputs, con_approx_sample(test_inputs,False), 'r', linewidth=2)
+    # plt.plot(x_star, con_approx_sample(x_star,False), 'o', markerfacecolor='none', markersize=15,markeredgewidth=2,markeredgecolor='orange')
+    plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    plt.plot([xmin, xmax], [0,0], '--k')
+    plt.xticks([])
+    plt.yticks([])
+    ymin_c,ymax_c = plt.ylim()
+    plt.xlim(xmin,xmax)
+    # plt.ylabel('Constraint')
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4B.pdf')
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    obj_mean, obj_var = obj_gp.predict(test_inputs)
+    plot_mean_and_var_1d(obj_mean, obj_var, test_inputs, obj_inputs, obj_vals)
+    plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    plt.ylim(ymin_f,ymax_f)
+    plt.xlim(xmin,xmax)
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4C.pdf')
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    con_mean, con_var = con_gp.predict(test_inputs)
+    plot_mean_and_var_1d(con_mean, con_var, test_inputs, con_inputs, con_vals)
+    # plot a line at 0
+    plt.plot([xmin, xmax], [0,0], '--k')
+    plt.plot(x_star, ymin_c, marker='^', color='orange', markersize=28)
+    plt.plot([x_star,x_star], [ymin_c,ymax_c], '--', color='orange')
+    plt.ylim(ymin_c,ymax_c)
+    plt.xlim(xmin,xmax)
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4D.pdf')
+
+    # now we condition on x*
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    plot_mean_and_var_1d(predictionEP['mf'], predictionEP['vf'], test_inputs, obj_inputs, obj_vals)
+    plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    plt.ylim(ymin_f,ymax_f)
+    plt.xlim(xmin,xmax)
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4E.pdf')
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    plot_mean_and_var_1d(predictionEP['mc'], predictionEP['vc'], test_inputs, con_inputs, con_vals)
+    # plot a line at 0
+    plt.plot([xmin, xmax], [0,0], '--k')
+    plt.plot(x_star, ymin_c, marker='^', color='orange', markersize=28)
+    plt.plot([x_star,x_star], [ymin_c,ymax_c], '--', color='orange')
+    plt.ylim(ymin_c,ymax_c)
+    plt.xlim(xmin,xmax)
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4F.pdf')
+
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    plt.plot(test_inputs, pesc['obj'], 'k', linewidth=2)
+    plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    plt.xticks([])
+    plt.yticks([])
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4G.pdf')
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    plt.plot(test_inputs, pesc['con'], 'k', linewidth=2)
+    plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    plt.xticks([])
+    plt.yticks([])
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4H.pdf')
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    plt.plot(test_inputs, acq_func(test_inputs, tasks=['obj']), 'k', linewidth=2)
+    # plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    plt.xticks([])
+    plt.yticks([])
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4I.pdf')
+
+    plt.figure(figsize=sz)
+    plt.clf()    
+    plt.plot(test_inputs, acq_func(test_inputs, tasks=['con']), 'k', linewidth=2)
+    # plt.plot(x_star, ymin_f, marker='^', color='orange', markersize=28)
+    # plt.plot([x_star,x_star], [ymin_f,ymax_f], '--', color='orange')
+    plt.xticks([])
+    plt.yticks([])
+    plt.tight_layout(pad=pad)
+    plt.savefig('test4J.pdf')
+
+
+    # now we compute it with an average over x*'s'
+    
+
+
+
+
 if __name__ == "__main__":
-    test_random_features_sampling()
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+    # test_random_features_sampling()
     # test_x_star_sampling()
     # test_acquisition_function()
+    make_cool_figures()
     

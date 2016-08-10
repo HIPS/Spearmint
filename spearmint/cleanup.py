@@ -185,12 +185,13 @@
 
 import os
 import sys
-import pymongo
 import json
 import shutil
 from spearmint.utils.parsing import parse_config_file
 from spearmint.utils.parsing import repeat_experiment_name
 from spearmint.utils.parsing import repeat_output_dir
+from spearmint.utils.database.mongodb import MongoDB
+
 
 def cleanup(path, repeat=-1):
 
@@ -200,29 +201,26 @@ def cleanup(path, repeat=-1):
     cfg = parse_config_file(path, 'config.json', verbose=False)
 
     db_address = cfg['database']['address']  
-    client = pymongo.MongoClient(db_address)
+    # client = pymongo.MongoClient(db_address)
+    db         = MongoDB(database_address=db_address)
 
-    experiment_name = cfg["experiment-name"]
+    experiment_name = cfg["experiment_name"]
 
-    if repeat >= 0:
+    if repeat >= 0: # only for advanced use
         experiment_name = repeat_experiment_name(experiment_name, repeat)
 
     print 'Cleaning up experiment %s in database at %s' % (experiment_name, db_address)
 
-    db = client.spearmint[experiment_name]
-    db['jobs'].drop()
-    db['hypers'].drop()
-    db['recommendations'].drop()
+    # db.remove_experiment(experiment_name) # does not work
+    db.remove_collection(experiment_name, 'jobs')
+    db.remove_collection(experiment_name, 'hypers')
+    db.remove_collection(experiment_name, 'recommendations')
+    db.remove_collection(experiment_name, 'start-time')
 
     # remove output files
     output_directory = repeat_output_dir(path, repeat) if repeat >= 0 else os.path.join(path, 'output')
     if os.path.isdir(output_directory):
         shutil.rmtree(output_directory)
-
-    # remove plots
-    plots_directory = os.path.join(path, 'plots')
-    if os.path.isdir(plots_directory):
-        shutil.rmtree(plots_directory)
 
 if __name__ == '__main__':
     cleanup(*sys.argv[1:])

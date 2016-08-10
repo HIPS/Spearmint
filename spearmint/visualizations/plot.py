@@ -12,10 +12,10 @@
 # possible.
 #
 # The Software was developed by Ryan P. Adams, Michael Gelbart, and
-# Jasper Snoek at Harvard University, Kevin Swersky at the
-# University of Toronto (“Toronto”), and Hugo Larochelle at the
-# Université de Sherbrooke (“Sherbrooke”), which assigned its rights
-# in the Software to Socpra Sciences et Génie
+# Jasper Snoek and at Harvard University, Kevin Swersky and Richard
+# Zemel at the University of Toronto (“Toronto”), and Hugo Larochelle
+# at the Université de Sherbrooke (“Sherbrooke”), which assigned its
+# rights in the Software to Socpra Sciences et Génie
 # S.E.C. (“Socpra”). Pursuant to an inter-institutional agreement
 # between the parties, it is distributed for free academic and
 # non-commercial research use by the President and Fellows of Harvard
@@ -182,41 +182,28 @@
 # to enter into this License and Terms of Use on behalf of itself and
 # its Institution.
 
+import sys
+from spearmint.visualizations    import plots_2d
+from spearmint.utils.parsing     import parse_config_file
+from spearmint.tasks.input_space import InputSpace
+# import plots_1d
 
-import numpy as np
 
-from .abstract_kernel import AbstractKernel
-from ..utils          import priors
-from ..utils.param    import Param as Hyperparameter
+def main(expt_dir):
+	options = parse_config_file(expt_dir, 'config.json')
+	input_space = InputSpace(options["variables"])
+
+	if input_space.num_dims == 2:
+		plots_2d.main(expt_dir)
+	elif input_space.num_dims == 1:
+		raise Exception("Plotting only implemented for 2 dimensional problems.")
+		# plots_1d.main(expt_dir)
+	else:
+		raise Exception("Plotting only implemented for 2 dimensional problems.")
+
+# usage: python plots_2d.py DIRECTORY
+if __name__ == '__main__':
+    main(sys.argv[1])
 
 
-class Noise(AbstractKernel):
-    def __init__(self, num_dims, name='noise', prior=None, value=1e-6):
-        self.name     = name
-        self.num_dims = num_dims
-
-        self.noise = Hyperparameter(
-            initial_value = value,
-            prior = priors.ProductOfPriors((priors.Horseshoe(0.1), priors.Tophat(0, 1.0))) if prior is None else prior,
-            # prior         = priors.NonNegative(priors.Horseshoe(0.1)) if prior is None else prior,
-            # prior         = priors.Exponential(mean=0.01) if prior is None else prior,
-            # prior         = priors.Scale(priors.Beta(1.0, 5.0), 2.0) if prior is None else prior,
-            name          = name
-        )
-
-    @property
-    def hypers(self):
-        return self.noise
-
-    def cov(self, inputs):
-        return np.diag(self.noise.value*np.ones(inputs.shape[0]))
-
-    def diag_cov(self, inputs):
-        return self.noise.value*np.ones(inputs.shape[0])
-
-    def cross_cov(self, inputs_1, inputs_2):
-        return np.zeros((inputs_1.shape[0],inputs_2.shape[0]))
-
-    def cross_cov_grad_data(self, inputs_1, inputs_2):
-       return np.zeros((inputs_1.shape[0],inputs_2.shape[0],self.num_dims))
 

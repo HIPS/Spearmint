@@ -227,7 +227,7 @@ class WhitenedPriorSliceSampler(AbstractSampler):
         return lp
 
     def sample(self, model):
-        for i in xrange(self.thinning + 1):
+        for i in xrange(self.sampler_options.get('thinning', 0) + 1):
             params_array, new_latent_values, current_ll = self.sample_fun(model, **self.sampler_options)
             hyperparameter_utils.set_params_from_array(self.params, params_array)
             model.latent_values.set_value(new_latent_values)

@@ -186,7 +186,7 @@
 from abc import ABCMeta, abstractmethod
 
 from ..utils import param as hyperparameter_utils
-
+import numpy as np
 
 class AbstractSampler(object):
     __metaclass__ = ABCMeta
@@ -194,18 +194,15 @@ class AbstractSampler(object):
     def __init__(self, *params_to_sample, **sampler_options):
         self.params          = params_to_sample
         self.sampler_options = sampler_options
-        self.current_ll      = None
-
+        self.current_ll      = -np.inf
         # Note: thinning is currently implemented such that each sampler does its thinning
-        # We could also do a different type of thinning, implemented in SamplerCollection,
+        # We could also do a different type of thinning, implemented at a higher level
         # where all samplers produce a sample, and then you thin (ABABAB rather than AAABBB)
-        self.thinning_overrideable = not sampler_options.has_key('thinning') # Thinning can be overrided if True
-        self.thinning              = sampler_options.get('thinning', 0)
 
     @abstractmethod
     def logprob(self, x, model):
         pass
-
+        
     @abstractmethod
     def sample(self, model):
         pass

@@ -391,19 +391,14 @@ def ei_evaluate_constraint_only(obj_model, constraint_models, cand, current_best
 class ExpectedImprovement(AbstractAcquisitionFunction):
     """ This is regular expected improvement when there are no constraints,
         and the constraint-weighted EI when there are constraints. """
-    def acquisition(self, objective_model_dict, constraint_models_dict, cand, current_best, compute_grad, tasks=None):
-        if tasks is not None and set(tasks) != set(objective_model_dict.keys()).union(set(constraint_models_dict.keys())):
-            print tasks
-            print objective_model_dict.keys()
-            print constraint_models_dict.keys()
-            raise Exception("ExpectedImprovement does not have competitive decouplings implemented") 
+    def create_acquisition_function(self, objective_model_dict, constraint_models_dict, current_best, **kwargs):
 
         objective_model = objective_model_dict.values()[0]
         if len(constraint_models_dict) == 0:
-            return compute_ei(objective_model, cand, 
+            return lambda cand, compute_grad, **kwargs: compute_ei(objective_model, cand, 
                 ei_target=current_best, compute_grad=compute_grad)
         else:
-            return constraint_weighted_ei(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)
+            return lambda cand, compute_grad, **kwargs: constraint_weighted_ei(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)
 
 
 class ConstraintAndMean(AbstractAcquisitionFunction):
@@ -415,5 +410,5 @@ class ConstraintAndMean(AbstractAcquisitionFunction):
  rather than EI. the problem with it is that it 
  suffers from the chicken and egg pathology for decoupled constraints.
  It's good if the objective is known and the constraint is unknown  """
-    def acquisition(self, objective_model, constraint_models_dict, cand, current_best, compute_grad):
-        return ei_evaluate_constraint_only(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)
+    def create_acquisition_function(self, objective_model, constraint_models_dict, current_best):
+        return lambda cand, compute_grad, **kwargs: ei_evaluate_constraint_only(objective_model, constraint_models_dict.values(), cand, current_best, compute_grad)

@@ -210,7 +210,7 @@ class EllipticalSliceSampler(AbstractSampler):
         # Here get the Cholesky from model
 
         params_array = hyperparameter_utils.params_to_array(self.params)
-        for i in xrange(self.thinning + 1):
+        for i in xrange(self.sampler_options.get('thinning', 0) + 1):
             params_array, current_ll = elliptical_slice(
                 params_array,
                 self.logprob,

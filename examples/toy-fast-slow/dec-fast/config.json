@@ -1,0 +1,6 @@
+{
+    "base config file"  : "$LOCATION_OF_THIS_FILE$/../base_config.json",
+    "experiment-name"   : "toy-new-fast",
+    "fast-updates"      : "True"
+}
+

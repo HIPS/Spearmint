@@ -204,3 +204,5 @@ class AbstractTransformation(object):
     def output_num_dims(self):
         return self.num_dims
 
+    def input_num_dims(self):
+        return self.num_dims

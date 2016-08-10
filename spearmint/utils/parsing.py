@@ -189,6 +189,8 @@ import numpy.random as npr
 import math
 import json
 import os
+import copy
+import time
 from collections import OrderedDict
 from collections import defaultdict
 
@@ -228,116 +230,145 @@ def parse_args(argTypes, args):
     return opt
 
 
+DEFAULTS = dict()
+DEFAULTS['resource name']        = 'Main'
+DEFAULTS['language']             = 'PYTHON'
+DEFAULTS['model']                = "GP"
+DEFAULTS['likelihood']           = "gaussian"
+DEFAULTS['database address']     = 'localhost'
+DEFAULTS['scheduler']            = 'local'
+DEFAULTS['max finished jobs']    = np.inf
+DEFAULTS['max concurrent']       = 1
+DEFAULTS['polling time']         = 2.0
+DEFAULTS['database name']        = 'spearmint'
+DEFAULTS['experiment name']      = 'unnamed-experiment'
+DEFAULTS['chooser']              = 'default_chooser'
+DEFAULTS['acquisition']          = 'EI'
+DEFAULTS['transformations']      = [{'BetaWarp' : {}}]
+DEFAULTS['task name']            = 'Objective'
+DEFAULTS['constraint name']      = 'Constraint'
+DEFAULTS['cost']                 = 1.0    # only for competitive decoupling, scale by this factor?
+DEFAULTS['always sample']        = True   # resample GPs each iteration even if there is no new data
+DEFAULTS['group']                = 0      # to specify competitive decoupling 
+DEFAULTS['scale duration']       = False  # only for competitive decoupling, do acq per unit time?
+DEFAULTS['max time mins']        = np.inf # terminate spearmint after this long
+DEFAULTS['fast updates']         = False  # only for PESC, do fast updates sometimes?
+DEFAULTS['predict fast updates'] = True   # only for fast updates -- very advanced
+DEFAULTS['thoughtfulness']       = 1.0     # only for fast updates -- very advanced
+DEFAULTS['normalize outputs']    = True
+DEFAULTS['recommendations']      = "during"   # this options has 3 possible values: 
+   # "during" means makes recommendations at every iteration, during optimization
+   # "end-all" means at the end, make recommendations for ALL iterations
+   # "end-one" means at the end, just make a recommendation given all the data
+# defaults for the chooser
+DEFAULTS['acq_grid_size']        = 10000  # size of grid used to initialize optimization of acquisition function
+DEFAULTS['fast_acq_grid_size']   = 1000   # for the fast updates only, if you want to use a different grid size
+DEFAULTS['rec_grid_size']        = 10000  # size of grid used to initialize optimization of recommendation
+DEFAULTS['pes_x*_grid_size']     = 1000   # size of grid used to initialize optimizaiton of x* in PES/PESC
+DEFAULTS['pes_num_rand_features']= 1000   # the number of random features used to approximate the GP in PES/PESC
+DEFAULTS['constraint delta']     = 1e-2   # for now we have one for each constraint
+DEFAULTS['use multi delta']      = True   # if true, p.c. is p(c_k>0)>1-delta for all k, else p(all c_k>0)>1-delta
+DEFAULTS['pes_num_x*_samples']   = 1      # if you want multiple x* samples per GP hyper sample (use with e.g. maximum likelihood)
+# DEFAULTS['tolerance']            = None   # optimization tolerance as a fraction of original units
+# DEFAULTS['unit tolerance']       = 1e-4   # optimization tolerance as a fraction of the space
+DEFAULTS['opt_acq_tol']          = 1e-4   # (fractional) precision to optimize acquisition function
+DEFAULTS['fast_opt_acq_tol']     = 1e-3   # for the fast updates only, if you want to use a different tolerance
+DEFAULTS['opt_rec_tol']          = 1e-4   # (fractional) precision to optimize recommendations
+DEFAULTS['pes_opt_x*_tol']       = 1e-6   # (fractional) precision to optimize x* samples in PESC
+DEFAULTS['nlopt constraint tol'] = 1e-6   # let NLOPT violate the PROBABILISTIC constraints a little bit
+DEFAULTS['check_grad']           = False
+DEFAULTS['parallel_opt']         = False
+DEFAULTS['num_spray']            = 10
+DEFAULTS['spray_std']            = 1e-4 # set to unit tolerance?
+DEFAULTS['optimize_best']        = True
+DEFAULTS['optimize_acq']         = True
+DEFAULTS['initial design size']  = 1
+DEFAULTS['nlopt method has grad']= 'LD_MMA'
+DEFAULTS['nlopt method no grad'] = 'LN_BOBYQA'
 
+# defaults for the GP options
+GP_OPTION_DEFAULTS = {
+    'verbose'           : False,
+    'mcmc_diagnostics'  : False,
+    'mcmc_iters'        : 10,
+    'burnin'            : 20,
+    'thinning'          : 0,
+    'num_fantasies'     : 1,
+    'caching'           : True,
+    'max_cache_mb'      : 256,
+    'likelihood'        : 'gaussian',
+    'kernel'            : 'Matern52',
+    'stability_jitter'  : 1e-6,
+    'fit_mean'          : True, # can set mcmc_iters to 0 to not sample anything
+    'fit_amp2'          : True,
+    'fit_ls'            : True,
+    'fit_noise'         : True,
+    'sampler'           : "SliceSampler",
+    # 'transformations'   : [],
+    'priors'            : [],
+    'initial_ls'        : 0.1,
+    'initial_mean'      : 0.0, # initial values of the hypers
+    'initial_amp2'      : 1.0,
+    'initial_noise'     : 0.0001
+}
+DEFAULTS.update(GP_OPTION_DEFAULTS)
+GP_CLASSIFIER_OPTION_DEFAULTS = {
+    'ess_thinning'      : 10,
+    'prior_whitening'   : True,
+    'binomial_trials'   : 1,
+    # 'transformations'   : [],
+    # 'priors'            : {'amp2' : {'distribution':'Exponential', 'parameters':[1.0]}},
+    # 'verbose'           : False,
+    'sigmoid'           : 'probit',
+    'epsilon'           : 0.5,
+    # 'likelihood'        : 'binomial'
+}
+DEFAULTS.update(GP_CLASSIFIER_OPTION_DEFAULTS)
 
+def change_to_underscore(d):
+    # change all hypens spaces to underscores
+    d_copy = d.copy()
+    for opt, val in d.iteritems():
+        opt_new = opt.replace(" ", "_")
+        opt_new = opt_new.replace("-", "_")
+        del d_copy[opt]
+        d_copy[opt_new] = val
+    return d_copy
+DEFAULTS = change_to_underscore(DEFAULTS)
 
- 
-DEFAULT_RESOURCE_NAME    = 'Main'
-DEFAULT_MODEL            = "GP"
-DEFAULT_LIKELIHOOD       = 'gaussian'
-DEFAULT_DATABASE_ADDRESS = 'localhost' 
-DEFAULT_SCHEDULER        = 'local'
-DEFAULT_MAX_FINISHED_JOBS= np.inf
-DEFAULT_MAX_CONCURRENT   = 1
-DEFAULT_POLLING_TIME     = 3.0
-DEFAULT_DATABASE_NAME    = 'spearmint'
-DEFAULT_EXPERIMENT_NAME  = 'unnamed-experiment'
-DEFAULT_CHOOSER          = 'default_chooser'
-DEFAULT_ACQUISITION_FCN  = 'EI'
-DEFAULT_TRANSFORMATIONS  = [{'BetaWarp' : {}}]
-DEFAULT_TASK_NAME        = 'Objective'
-DEFAULT_CONSTRAINT_NAME  = 'Constraint'
-DEFAULT_CONSTRAINT_DELTA = 1e-2  # for now we have one for each constraint
-DEFAULT_INPUT_TOLERANCE  = None  # can also specify the tolerance in the original units
-DEFAULT_UNIT_TOLERANCE   = 1e-4  # the tolerance with respect to the unit space
-DEFAULT_OPT_ACQ_MAXEVAL  = 5000
-DEFAULT_NLOPT_CONSTRAINT_TOLERANCE = 1e-8
-DEFAULT_COST             = 1.0
-DEFAULT_ALWAYS_SAMPLE    = True  
-DEFAULT_GROUP            = 0
-DEFAULT_SCALE_DURATIONS  = False
-# above: if this is True (default), then the chooser's fit() was always refit all the GPs
-# if it is True then if a task has no new data, the GP will not be re-fit (this saves time)
+def parse_true_false_strings(d):
+    for opt in d:
+        if isinstance(d[opt], basestring):
+            if d[opt].lower() == "false":
+                d[opt] = False
+            elif d[opt].lower() == "true":
+                d[opt] = True
+    return d # not actually needed, whatever
+
 
 """
 Parse the config and set defaults
+update_options are for when you have a base config file.
 """
-def parse_config_file(config_file_dir, config_file_name, verbose=True):
+def parse_config_file(config_file_dir, config_file_name, verbose=False, update_options=None):
+    
     try:
         with open(os.path.join(config_file_dir, config_file_name), 'r') as f:
             options = json.load(f, object_pairs_hook=OrderedDict) # important for the order of the transformations!
     except ValueError:
         raise Exception("%s did not load properly. Perhaps a spurious comma?" % config_file_name)
 
+    options = change_to_underscore(options)
+    options = parse_true_false_strings(options)
+
     # allow config files to inherit from each other in a very primitive way
     if "base_config_file" in options:
         base_config_path = options["base_config_file"].replace("$LOCATION_OF_THIS_FILE$", config_file_dir)
-        base_options = parse_config_file(*os.path.split(base_config_path), verbose=False)
-        base_options.update(options)
-        # Need to overwrite things at the task-option level also
-
-        if base_options["acquisition"] == "EI":
-            base_options["acquisition"] = 'ExpectedImprovement'
-
-        for opt_name, opt in options.iteritems():
-            for task_name, task_opt in base_options['tasks'].iteritems():
-                if opt_name not in ["tasks", "resources", "variables"]:
-                    if opt_name == "acquisition" and opt == "EI":
-                        task_opt[opt_name] = "ExpectedImprovement"
-                    else:
-                        task_opt[opt_name] = opt
-        if verbose:
-            for task_name, task_opts in base_options['tasks'].iteritems():
-                logging.debug('Found Task "%s"' % task_name)
-                for task_opt_name, task_opt_val in task_opts.iteritems():
-                    logging.debug('  %-18s: %s' % (task_opt_name, task_opt_val))
-                logging.debug('')
-        return base_options
+        del options['base_config_file']
+        logging.debug("Parsing base config file at %s" % base_config_path)
+        return parse_config_file(*os.path.split(base_config_path), verbose=verbose, update_options=options)
 
     options["config"] = config_file_name
-
-    # If tasks field not specified at all, set default
-    if 'tasks' not in options:
-        options['tasks'] = dict()
-        options['tasks'][DEFAULT_TASK_NAME] = {
-            'type'       : 'OBJECTIVE', 
-            'likelihood' : options.get('likelihood', DEFAULT_LIKELIHOOD) }
-
-        if 'num_constraints' in options:
-            for i in xrange(int(options['num_constraints'])):
-                options['tasks']['%s%d' % (DEFAULT_CONSTRAINT_NAME, i)] = {
-                    'type'       : 'CONSTRAINT', 
-                    'likelihood' : options.get('likelihood', DEFAULT_LIKELIHOOD) }
-
-    if "model" not in options:
-        options["model"] = DEFAULT_MODEL
-
-    if "likelihood" not in options:
-        options["likelihood"] = DEFAULT_LIKELIHOOD
-
-    # was not needed before, but needed now that we can also specify this by task,
-    # not just by resource...
-    if "max_finished_jobs" not in options:
-        options["max_finished_jobs"] = DEFAULT_MAX_FINISHED_JOBS
-
-    # Whether to scale the acquisition function by the expected duration of a task
-    if "scale-duration" not in options:
-        options['scale-duration'] = DEFAULT_SCALE_DURATIONS
-
-    # Parse out the name and programming language of the main file
-    # If it is not in the task options, check for a high level option
-    for task_name, task_opt in options['tasks'].iteritems():
-        if "main_file" not in task_opt:
-            if "main_file" in options:
-                task_opt['main_file'] = options['main_file']
-            else:
-                raise Exception("main_file not specified for task %s" % task_name)
-
-        if "language" not in task_opt:
-            if "language" in options:
-                task_opt['language'] = options['language']
-            else:
-                raise Exception("language not specified for task %s" % task_name)
 
     # Look for the main file in expt_dir, unless you explicitly specify otherwise in "main_file_path"
     if "main_file_path" not in options:
@@ -345,80 +376,89 @@ def parse_config_file(config_file_dir, config_file_name, verbose=True):
     else:
         options["main_file_path"] = options["main_file_path"].replace("$LOCATION_OF_THIS_FILE$", config_file_dir)
 
-    # Some stuff for decoupling
+    return parse_config(options, verbose, update_options)
 
-    for task_name, task_opt in options['tasks'].iteritems():
-        if "group" not in task_opt:
-            task_opt["group"] = DEFAULT_GROUP  # Set default group to 0 for everything (fully coupled)
-    for task_name, task_opt in options['tasks'].iteritems():
-        if "cost" not in task_opt:
-            task_opt["cost"] = DEFAULT_COST # Set cost to 1.0
+def parse_config(options, verbose=False, update_options=None):
 
-    # Priority 1: in task options
-    # Priority 2: in top-level options
-    # Priority 3: default value
-    # for task_name, task_opt in options['tasks'].iteritems():
-    #     if "acquisition" not in task_opt:
-    #         if "acquisition" in options:
-    #             task_opt['acquisition'] = options['acquisition']
-    #         else:
-    #             task_opt['acquisition'] = DEFAULT_ACQUISITION_FCN
+    # check for unrecognized options
+    warnings_wait = False
+    for option in options:
+        if option not in DEFAULTS and option not in ["base_config_file", "config", "main_file", "main_file_path", "variables", "tasks", "resources"]:
+            logging.info('WARNING: unrecognized option "%s"' % option)
+            warnings_wait = True
+    if warnings_wait:
+        time.sleep(3)
 
-    #     # Allow the abbreviation "EI" for "ExpectedImprovement"
-    #     if task_opt['acquisition'] == 'EI':
-    #         task_opt['acquisition'] = 'ExpectedImprovement'
-    options["acquisition"] = options.get("acquisition", DEFAULT_ACQUISITION_FCN)
+    # print out nondefault options
+    # for opt_name, opt_val in options.iteritems():
+    #     logging.debug("Got option %s = %s" % (opt_name, opt_val))
+
+    # set things to defaults
+    options_with_defaults = DEFAULTS.copy()
+    options_with_defaults.update(options)
+    options = options_with_defaults
+
+    # Here is where you stick in the options from the specific config file,
+    # if it inherited from a base config file.
+    if update_options is not None:
+        options.update(update_options)
+
+    
+
+    # If tasks field not specified at all, set default
+    if 'tasks' not in options:
+        options['tasks'] = dict()
+        options['tasks'][DEFAULTS['task_name']] = {
+            'type'       : 'OBJECTIVE', 
+            'likelihood' : options.get('likelihood', DEFAULTS['likelihood']) }
+
+        if 'num_constraints' in options:
+            for i in xrange(int(options['num_constraints'])):
+                options['tasks']['%s%d' % (DEFAULTS['constraint_name'], i)] = {
+                    'type'       : 'CONSTRAINT', 
+                    'likelihood' : options.get('likelihood', DEFAULTS['likelihood']) }
+
+
     if options["acquisition"] == "EI":
         options["acquisition"] = 'ExpectedImprovement'
-
-    options['constraint_tol'] = options.get('constraint_tol', DEFAULT_NLOPT_CONSTRAINT_TOLERANCE)
 
     """ stick all top-level options in all the task options if they are not already there """
     for opt_name, opt in options.iteritems():
         for task_name, task_opt in options['tasks'].iteritems():
             if opt_name not in task_opt:
                 if opt_name not in ["tasks", "resources", "variables"]:
-                    task_opt[opt_name] = opt
+                    task_opt[opt_name] = copy.copy(opt)
+                    # the copying is no longer needed, probably
 
-    options['tolerance']      = options.get('tolerance',      DEFAULT_INPUT_TOLERANCE)
-    options['unit_tolerance'] = options.get('unit_tolerance', DEFAULT_UNIT_TOLERANCE)
-
-    options['opt_acq_maxeval'] = options.get('opt_acq_maxeval', DEFAULT_OPT_ACQ_MAXEVAL)
-
-    options['polling_time'] = options.get('polling_time', DEFAULT_POLLING_TIME)
-
-    options['always_sample'] = options.get('always_sample', DEFAULT_ALWAYS_SAMPLE)
-
-    # Set sensible defaults for options
-    options['chooser']  = options.get('chooser', DEFAULT_CHOOSER)
-
-    # Set warping default to BetaWarp for all tasks
+    # Turn off warping and fit_mean if you are using PES
     for task_name, task_opts in options['tasks'].iteritems():
-        if "transformations" not in task_opts:
-            # If you are using PES, turn off transformations!!
-            if options["acquisition"] == "PES":
+        # If you are using PES, turn off transformations!!
+        if task_opts["acquisition"] == "PES":
+            if task_opts['transformations'] != []:
+                logging.debug('Warning: turning off transformations for task %s using PESC' % task_name)
                 task_opts['transformations'] = []
-            else:    
-                task_opts['transformations'] = DEFAULT_TRANSFORMATIONS
+            if task_opts['fit_mean']:
+                logging.debug('Warning: turning off fit_mean for task %s using PESC' % task_name)
+                task_opts['fit_mean'] = False
+
+        if options['recommendations'] not in ("during", "end-all", "end-one"):
+            logging.debug('Warning: unknown setting for recommendations: %s setting to default' % options['recommendations'])
+            options['recommendations'] = DEFAULTS['recommendations']
+
+        if task_opts['acquisition'] == "ExpectedImprovement":
+            if options['recommendations'] != "during":
+                logging.debug('Warning: turning recommendations to "during" because you are using EI')
+                options['recommendations'] = "during"
+
+        if task_opts['sampler'] == "MaximumLikelihood":
+            logging.debug('Warning: setting burnin=0, mcmc_iters=1 because you are using MaximumLikelihood')
+            task_opts['burnin'] = 0
+            task_opts['mcmc_iters'] = 1
 
     # Make sure there is exactly 1 objective
     numObjectives = len(get_objectives_and_constraints(options)[0])
     if numObjectives != 1:
         raise Exception("You have %d objectives. You must have exactly 1" % numObjectives)
-
-    # set the default deltas
-    for task_name, task_opt in options['tasks'].iteritems():
-        if task_opt['type'].lower() == 'constraint':
-            if 'delta' in task_opt:
-                pass
-            elif 'delta' in options: # this is useless, if it's in the higher level it'll be moved down here to the task level already
-                task_opt['delta'] = options['delta']
-            else:
-                task_opt['delta'] = DEFAULT_CONSTRAINT_DELTA
-            # task_opt['delta'] = task_opt.get('delta', DEFAULT_CONSTRAINT_DELTA)
-
-    if "experiment-name" not in options:
-        options["experiment-name"] = DEFAULT_EXPERIMENT_NAME
 
     # Set DB address
     db_address = os.getenv('SPEARMINT_DB_ADDRESS')
@@ -428,8 +468,9 @@ def parse_config_file(config_file_dir, config_file_name, verbose=True):
         options['database']['address'] = db_address
         logging.info('Got database address %s from environment variable\n' % db_address)        
     else:
-        options['database'] = options.get('database', {'name': DEFAULT_DATABASE_NAME, 'address': DEFAULT_DATABASE_ADDRESS})
+        options['database'] = options.get('database', {'name': DEFAULTS['database_name'], 'address': DEFAULTS['database_address']})
     
+    # print out stuff about the tasks    
     if verbose:
         for task_name, task_opts in options['tasks'].iteritems():
             logging.debug('Found Task "%s"' % task_name)
@@ -449,23 +490,24 @@ def get_objectives_and_constraints(config):
             con.append(task_name)
     return obj, con
 
+
 # Parses the config dict and returns the actual resource objects.
 def parse_resources_from_config(config):
 
     # If the user did not explicitly specify resources
     # Then use a default name and use the upper level config for resource options
     if "resources" not in config:
-        config["resources"] = {DEFAULT_RESOURCE_NAME : config}
+        config["resources"] = {DEFAULTS["resource_name"] : config}
 
     resources = dict()
     for resource_name, resource_opts in config["resources"].iteritems():
         tasks = _parse_tasks_in_resource_from_config(resource_name, config)
 
-        scheduler_class  = resource_opts.get("scheduler", DEFAULT_SCHEDULER)
+        scheduler_class  = resource_opts.get("scheduler", DEFAULTS['scheduler'])
         scheduler_object = importlib.import_module('spearmint.schedulers.' + scheduler_class).init(resource_opts)
 
-        max_concurrent = resource_opts.get('max_concurrent', DEFAULT_MAX_CONCURRENT)
-        max_finished_jobs = resource_opts.get('max_finished_jobs', DEFAULT_MAX_FINISHED_JOBS)
+        max_concurrent = resource_opts.get('max_concurrent', DEFAULTS['max_concurrent'])
+        max_finished_jobs = resource_opts.get('max_finished_jobs', DEFAULTS['max_finished_jobs'])
 
         resources[resource_name] = Resource(resource_name, tasks, scheduler_object, scheduler_class, max_concurrent, max_finished_jobs)
 
@@ -483,9 +525,8 @@ def _parse_tasks_in_resource_from_config(resource_name, config):
 
     # If the user did not explicitly specify tasks, then we have to assume
     # the single task runs on all resources
-    # if "tasks" not in config:
-    #     return [DEFAULT_TASK_NAME]
-    # else:
+
+
     tasks = list()
     for task_name, task_config in config["tasks"].iteritems():
         # If the user specified tasks but not specific resources for those tasks,
@@ -551,7 +592,10 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
 
                     elif job['status'] == 'complete':
                         task.inputs = np.append(task.inputs, input_space.vectorify(job['params'])[None],axis=0)
-                        task.values = np.append(task.values, job['values'][task_name])
+                        val = job['values'][task_name]
+                        if isinstance(val, dict):
+                            raise Exception("Value returned is a dict containing dicts: %s" % job['values'])
+                        task.values = np.append(task.values, val)
                         task.durations = np.append(task.durations, job['end time']-job['start time'])
     # The next step is to add in the "NaN" task if needed
     # This is how it works: if any task was ever NaN, then we add in this new special task
@@ -567,9 +611,7 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
     
     # Here is what I actually want: to be able to hash the inputs
 
-    # added because PESC is only for GPs
-    if 'nan-likelihood' not in options and options['acquisition'] == 'PES':
-        options['nan-likelihood'] = 'gaussian'
+
 
     # remove the old NaN task
     if 'NaN' in tasks:
@@ -585,6 +627,7 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
 
             nan_likelihood = options['nan-likelihood']
         else:
+            
             # First, see if all the tasks currently in this group are noiseless
             # If so, we should make the NaN task noiseless also
             # This is important because if a NaN constraint unnecessarily
@@ -592,7 +635,7 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
             # the confidence threshold
             all_noiseless = True
             for task_name in tasks:
-                if tasks[task_name].options.get('likelihood', DEFAULT_LIKELIHOOD).lower() not in ['noiseless', 'step']:
+                if tasks[task_name].options.get('likelihood', DEFAULTS['likelihood']).lower() not in ['noiseless', 'step']:
                     all_noiseless = False
                     break
             nan_likelihood = 'step' if all_noiseless else 'binomial'
@@ -627,14 +670,14 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
 
         # what a mess...
         nan_task_options = dict()
-        nan_task_options['delta'] = options.get("delta", DEFAULT_CONSTRAINT_DELTA)
-        nan_task_options['group'] = DEFAULT_GROUP
-        nan_task_options['constraint_tol'] = options.get("constraint_tol", DEFAULT_NLOPT_CONSTRAINT_TOLERANCE)
+        nan_task_options['constraint_delta'] = options.get("constraint_delta", DEFAULTS['constraint_delta'])
+        nan_task_options['group'] = DEFAULTS['group']
+        nan_task_options['nlopt_constraint_tol'] = options.get("nlopt_constraint_tol", DEFAULTS['nlopt_constraint_tol'])
         if options["acquisition"] == "PES":
             nan_task_options['transformations'] = []
         else:    
-            nan_task_options['transformations'] = options.get("transformations", DEFAULT_TRANSFORMATIONS)
-        nan_task_options['cost']  = DEFAULT_COST
+            nan_task_options['transformations'] = options.get("transformations", DEFAULTS['transformations'])
+        nan_task_options['cost']  = DEFAULTS['cost']
 
         # make sure the options are sorted out, just like the other tasks
 
@@ -644,15 +687,13 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
                         nan_task_options[opt_name] = opt
         nan_task_options['likelihood'] = nan_likelihood
         nan_task_options['type'] = 'constraint'
-        if nan_likelihood in ('step','binomial'):
-            nan_task_options['model'] = 'GPClassifier'
 
         nan_task = Task('NaN', nan_task_options, input_space.num_dims)
         nan_task.inputs  = nan_task_inputs
         nan_task.values  = nan_task_values
 
         if np.any(np.isnan(nan_task_inputs)) or np.any(np.isnan(nan_task_values)):
-            raise Exception("This should not happen.")
+            raise Exception("NaN in NaN task inputs/values???")
 
         options["tasks"]['NaN'] = nan_task_options
         tasks['NaN'] = nan_task

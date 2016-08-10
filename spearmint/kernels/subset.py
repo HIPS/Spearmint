@@ -186,37 +186,37 @@
 import numpy as np
 
 from .abstract_kernel import AbstractKernel
-from ..utils          import priors
-from ..utils.param    import Param as Hyperparameter
 
 
-class Noise(AbstractKernel):
-    def __init__(self, num_dims, name='noise', prior=None, value=1e-6):
+class Subset(AbstractKernel):
+    """
+    This kernel calls an underlying kernel using only a subset of dimensions of the input inputs.
+    """
+    def __init__(self, num_dims, kernel, inds, name='SubsetKernel'):
         self.name     = name
         self.num_dims = num_dims
+        self.kernel   = kernel
+        self.inds     = inds
 
-        self.noise = Hyperparameter(
-            initial_value = value,
-            prior = priors.ProductOfPriors((priors.Horseshoe(0.1), priors.Tophat(0, 1.0))) if prior is None else prior,
-            # prior         = priors.NonNegative(priors.Horseshoe(0.1)) if prior is None else prior,
-            # prior         = priors.Exponential(mean=0.01) if prior is None else prior,
-            # prior         = priors.Scale(priors.Beta(1.0, 5.0), 2.0) if prior is None else prior,
-            name          = name
-        )
+        self.validate_inds()
 
-    @property
-    def hypers(self):
-        return self.noise
+    def validate_inds(self):
+        assert len(set(self.inds)) == len(self.inds), 'Each index may only be used once.'
+        assert max(self.inds) < self.num_dims, 'Maximum index exceeds number of dimensions.'
 
     def cov(self, inputs):
-        return np.diag(self.noise.value*np.ones(inputs.shape[0]))
+        return self.kernel.cov(inputs[:,self.inds])
 
     def diag_cov(self, inputs):
-        return self.noise.value*np.ones(inputs.shape[0])
+        return self.kernel.diag_cov(inputs[:,self.inds])
 
     def cross_cov(self, inputs_1, inputs_2):
-        return np.zeros((inputs_1.shape[0],inputs_2.shape[0]))
+        return self.kernel.cross_cov(inputs_1[:,self.inds],inputs_2[:,self.inds])
 
+    # This is the gradient wrt **inputs_2**
     def cross_cov_grad_data(self, inputs_1, inputs_2):
-       return np.zeros((inputs_1.shape[0],inputs_2.shape[0],self.num_dims))
+        grad  = np.zeros((inputs_1.shape[0],inputs_2.shape[0],self.num_dims))
+        grad[:,:,self.inds] = self.kernel.cross_cov_grad_data(inputs_1[:,self.inds],inputs_2[:,self.inds])
+
+        return grad
 
