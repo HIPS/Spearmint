@@ -4,12 +4,14 @@ spearmint: Bayesian optimization codebase
 Spearmint is a software package to perform Bayesian optimization. The Software is designed to automatically run experiments (thus the code name spearmint) in a manner that iteratively adjusts a number of parameters so as to minimize some objective in as few runs as possible.
 
 ## IMPORTANT: Please read about the license
-Spearmint is under an **Academic and Non-Commercial Research Use License**.  Before using spearmint please be aware of the [license](LICENSE.md).  If you do not qualify to use spearmint you can ask to obtain a license as detailed in the [license](LICENSE.md) or you can use the older open source code version (which is somewhat outdated) at https://github.com/JasperSnoek/spearmint.  
+Spearmint is under an **Academic and Non-Commercial Research Use License**.  Before using spearmint please be aware of the [license](LICENSE.md).  If you do not qualify to use Spearmint you can ask to obtain a license as detailed in the [license](LICENSE.md) or you can use the older open source code version (which is somewhat outdated) at https://github.com/JasperSnoek/spearmint.  
 
 ## IMPORTANT: You are off the main branch!
 This is the PESC branch. This branch contains the Predictive Entropy Search with Constraints (PESC) acquisition function, described in the paper Predictive Entropy Search for Bayesian Optimization with Unknown Constraints (http://arxiv.org/abs/1502.05312). Note: using PESC <i>without</i> constraints results in a method that is similar (but not exactly equivalent) to Predictive Entropy Search (http://arxiv.org/abs/1406.2541). This branch also comes with a basic 2D plotting routine. 
 
-####Relevant Publications
+Update: as of 23-08-2016 this branch also includes support for decoupling as well as PESC-F as discussed in the paper A General Framework for Constrained Bayesian Optimization using Information-based Search.
+
+## Relevant Publications
 
 Spearmint implements a combination of the algorithms detailed in the following publications:
 
@@ -32,12 +34,21 @@ Spearmint implements a combination of the algorithms detailed in the following p
     Michael Gelbart, Jasper Snoek and Ryan Prescott Adams
     Uncertainty in Artificial Intelligence, 2014
 
-This branch also includes the method in 
+This branch also includes the methods in 
 
     Predictive Entropy Search for Bayesian Optimization with Unknown Constraints
     José Miguel Hernández-Lobato, Michael A. Gelbart, Matthew W. Hoffman, Ryan P. Adams, Zoubin Ghahramani
-    arXiv: 1502.05312 [stat.ML], 2015.
-
+    International Conference on Machine Learning, 2015.
+    
+    Constrained Bayesian Optimization and Applications
+    Michael A. Gelbart, PhD Thesis, Harvard University, 2015
+    
+    A General Framework for Constrained Bayesian Optimization using Information-based Search
+    José Miguel Hernández-Lobato, Michael A. Gelbart,  Ryan P. Adams, Matthew W. Hoffman, Zoubin Ghahramani
+    Journal of Machine Learning Research, 2016.
+    
+## Usage instructions
+    
 ### STEP 1: Installation
 1. Download/clone the spearmint code
 2. Install the spearmint package using pip: "pip install -e \</path/to/spearmint/root\>" (the -e means changes will be reflected automatically)
@@ -77,3 +88,4 @@ You can start multiple experiments at once using "python run_experiments.py \</p
 7. make install
 8. export PYTHONPATH=PATH/TO/YOUR/NLOPT/nlopt-2.4.2/build/lib/python2.7/site-packages/:$PYTHONPATH
 9. (you can add line 8 to a .bashrc or equivalent file)
+ 
