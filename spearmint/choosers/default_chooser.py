@@ -487,6 +487,8 @@ class DefaultChooser(object):
             suggestion = sobol_grid.generate(self.num_dims, grid_size=100, grid_seed=total_pending)[0]
             # above: for some reason you can't generate a grid of size 1. heh.
 
+            suggestion = self.input_space.from_unit(suggestion) # convert to original space
+
             logging.info("\nSuggestion:     ")
             self.input_space.paramify_and_print(suggestion.flatten(), left_indent=16)
             if len(set(task_couplings.values())) > 1: # if decoupled
