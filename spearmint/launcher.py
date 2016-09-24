@@ -259,13 +259,13 @@ def launch(db_address, experiment_name, job_id):
             elif len(job['tasks']) == 1: # Only one named job and result is not a dict, stick it in dict
                 result = {job['tasks'][0] : result}
             else:
-                result = {DEFAULTS['task name'] : result}
+                result = {DEFAULTS['task_name'] : result}
         else:
             if "objective" in result and "constraints" in result:
                 result_new = dict()
-                result_new[DEFAULTS['task name']] = result["objective"]
+                result_new[DEFAULTS['task_name']] = result["objective"]
                 for i in xrange(len(result["constraints"])):
-                    result_new['%s%d' % (DEFAULTS['constraint name'], i)] = result["constraints"][i]
+                    result_new['%s%d' % (DEFAULTS['constraint_name'], i)] = result["constraints"][i]
                 result = result_new
 
         # actually it's ok if the result dict contains extra stuff. so it would be fine just to

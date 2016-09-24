@@ -619,26 +619,31 @@ def parse_tasks_from_jobs(jobs, experiment_name, options, input_space):
 
     # if any task has NaN values in it, create the special task
     if reduce(lambda x,y:x or y,map(lambda x:np.any(np.isnan(x.values)), tasks.values()), False):
-        if options.get("nan-likelihood", "binomial").lower() in ("gaussian", "noiseless"):
+
+        # First, see if all the tasks currently in this group are noiseless
+        # If so, we should make the NaN task noiseless also
+        # This is important because if a NaN constraint unnecessarily
+        # thinks it's non-deterministic it could take MUCH longer to pass
+        # the confidence threshold
+        all_noiseless = True
+        for task_name in tasks:
+            if tasks[task_name].options.get('likelihood', DEFAULTS['likelihood']).lower() not in ['noiseless', 'step']:
+                all_noiseless = False
+                break
+
+        if options["acquisition"] == "PES":
             # in some cases, for example with PESC, you may not want to use a GP classifier to a NaN task
+            # thus use a regular GP here and map {0,1} to {-1,1}
             nan_task_inputs = tasks.values()[0].inputs
             nan_task_values = np.logical_not(reduce(np.logical_or, map(np.isnan, [task.values for task in tasks.values()])))
             nan_task_values = nan_task_values*2.0 - 1.0
 
-            nan_likelihood = options['nan-likelihood']
+            nan_likelihood = "noiseless" if all_noiseless else "gaussian" 
+            # (above) could even just check if Objective is noiseless (this is more conservative)
+
         else:
-            
-            # First, see if all the tasks currently in this group are noiseless
-            # If so, we should make the NaN task noiseless also
-            # This is important because if a NaN constraint unnecessarily
-            # thinks it's non-deterministic it could take MUCH longer to pass
-            # the confidence threshold
-            all_noiseless = True
-            for task_name in tasks:
-                if tasks[task_name].options.get('likelihood', DEFAULTS['likelihood']).lower() not in ['noiseless', 'step']:
-                    all_noiseless = False
-                    break
             nan_likelihood = 'step' if all_noiseless else 'binomial'
+            
 
             # WARNING:
             # There is a problem here. Before I was taking the unique set.  
