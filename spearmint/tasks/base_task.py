@@ -267,6 +267,8 @@ class BaseTask(object):
 
     # Converts a vector in input space to the corresponding dict of params
     def paramify(self, data_vector):
+        if data_vector.ndim == 0:
+            data_vector = np.array([data_vector])
         if data_vector.ndim != 1:
             raise Exception('Input to paramify must be a 1-D array.')
 
