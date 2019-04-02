@@ -5,7 +5,7 @@ Spearmint is a software package to perform Bayesian optimization. The Software i
 
 **IMPORTANT:** Spearmint is under an **Academic and Non-Commercial Research Use License**.  Before using spearmint please be aware of the [license](LICENSE.md).  If you do not qualify to use spearmint you can ask to obtain a license as detailed in the [license](LICENSE.md) or you can use the older open source code version (which is somewhat outdated) at https://github.com/JasperSnoek/spearmint.  
 
-####Relevant Publications
+### Relevant Publications
 
 Spearmint implements a combination of the algorithms detailed in the following publications:
 
@@ -28,7 +28,7 @@ Spearmint implements a combination of the algorithms detailed in the following p
     Michael Gelbart, Jasper Snoek and Ryan Prescott Adams
     Uncertainty in Artificial Intelligence, 2014
 
-####Setting up Spearmint
+### Setting up Spearmint
 
 **STEP 1: Installation**  
 
